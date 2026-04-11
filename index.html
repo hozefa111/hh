@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#0a0a0c">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="description" content="Track 3 Patti scores like a pro — leaderboard, rounds, settle-up">
+    <link rel="manifest" href="manifest.json">
+    <title>3 Patti PRO — Score Tracker</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top App Bar -->
+        <header class="app-header">
+            <div class="logo">
+                <i class="fa-solid fa-crown gold-text"></i>
+                <h1>3 Patti <span class="gold-text">PRO</span></h1>
+            </div>
+            <div class="header-actions">
+                <button class="icon-btn" id="btn-sync" title="Cloud Sync">
+                    <i class="fa-solid fa-cloud"></i>
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="app-content" id="app-content">
+            
+            <!-- VIEW: HOME (Dashboard) -->
+            <div id="view-home" class="view active">
+                <div class="dashboard-hero">
+                    <h2 class="greeting">Table Status <i class="fa-solid fa-fire text-orange"></i></h2>
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <span class="stat-label">Players</span>
+                            <span class="stat-value" id="stat-active-players">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Rounds</span>
+                            <span class="stat-value" id="stat-total-rounds">0</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">Top Winner</span>
+                            <span class="stat-value text-success" id="stat-top-winner" style="font-size:1.2rem">—</span>
+                        </div>
+                        <div class="stat-card">
+                            <span class="stat-label">On Table</span>
+                            <span class="stat-value gold-text" id="stat-total-money">₹0</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section-title">
+                    <h3>Quick Actions</h3>
+                </div>
+                <div class="action-grid">
+                    <button class="action-card" onclick="navTo('view-round')">
+                        <div class="action-icon bg-gold"><i class="fa-solid fa-plus"></i></div>
+                        <span>New Round</span>
+                    </button>
+                    <button class="action-card" onclick="navTo('view-players')">
+                        <div class="action-icon bg-blue"><i class="fa-solid fa-user-plus"></i></div>
+                        <span>Players</span>
+                    </button>
+                    <button class="action-card" onclick="navTo('view-settle')">
+                        <div class="action-icon bg-green"><i class="fa-solid fa-hand-holding-dollar"></i></div>
+                        <span>Settle Up</span>
+                    </button>
+                    <button class="action-card" onclick="undoLastRound()">
+                        <div class="action-icon bg-red"><i class="fa-solid fa-rotate-left"></i></div>
+                        <span>Undo Round</span>
+                    </button>
+                </div>
+
+                <div class="section-title" style="margin-top: 1.5rem;">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h3>Recent Activity</h3>
+                        <div style="display:flex; gap:0.5rem;">
+                            <button class="text-btn" onclick="resetGamePrompt()">
+                                <i class="fa-solid fa-rotate-left"></i> Reset Scores
+                            </button>
+                            <button class="text-btn" style="color:var(--danger);" onclick="deleteAllDataPrompt()">
+                                <i class="fa-solid fa-trash-can"></i> Delete All
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="activity-feed" id="activity-feed">
+                    <div class="empty-state-box">
+                        <i class="fa-solid fa-cards fa-2x"></i>
+                        <p>No rounds yet. Add players and start playing!</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VIEW: PLAYERS -->
+            <div id="view-players" class="view">
+                <div class="sticky-header">
+                    <h2>Manage Players</h2>
+                    <form id="add-player-form" class="flex-form">
+                        <input type="text" id="player-name" placeholder="Enter player name..." required autocomplete="off" maxlength="20">
+                        <button type="submit" class="btn btn-gold"><i class="fa-solid fa-plus"></i> Add</button>
+                    </form>
+                </div>
+                
+                <div class="players-list" id="players-list"></div>
+
+                <div class="section-title inactive-title" style="display: none;" id="inactive-title">
+                    <h3><i class="fa-solid fa-moon"></i> Benched Players</h3>
+                </div>
+                <div class="inactive-players-list" id="inactive-players-list"></div>
+            </div>
+
+            <!-- VIEW: ADD ROUND -->
+            <div id="view-round" class="view">
+                <h2>Record New Round</h2>
+                <p class="subtitle">Enter each player's win (+) or loss (-) amount</p>
+                
+                <div class="round-calculator" id="round-calculator"></div>
+
+                <div class="round-summary">
+                    <div class="balance-check" id="balance-check">
+                        Net: <span id="balance-sum">0</span>
+                    </div>
+                    <button class="btn btn-gold full-width btn-xl" id="save-round-btn" disabled>
+                        <i class="fa-solid fa-check-circle"></i> Save Round
+                    </button>
+                </div>
+            </div>
+
+            <!-- VIEW: LEADERBOARD -->
+            <div id="view-leaderboard" class="view">
+                <h2>Leaderboard <i class="fa-solid fa-trophy gold-text"></i></h2>
+                
+                <div class="podium-container" id="podium-container"></div>
+                <div class="leaderboard-list" id="leaderboard-list"></div>
+            </div>
+
+            <!-- VIEW: SETTLE UP -->
+            <div id="view-settle" class="view">
+                <h2>Settle Up <i class="fa-solid fa-handshake gold-text"></i></h2>
+                <p class="subtitle">Who owes whom at the end of the game</p>
+                
+                <div class="settle-up-list" id="settle-up-list"></div>
+            </div>
+
+        </main>
+
+        <!-- Bottom Navigation -->
+        <nav class="bottom-nav">
+            <button class="nav-item active" data-target="view-home">
+                <i class="fa-solid fa-house"></i>
+                <span>Home</span>
+            </button>
+            <button class="nav-item" data-target="view-players">
+                <i class="fa-solid fa-users"></i>
+                <span>Players</span>
+            </button>
+            <button class="nav-item center-fab" data-target="view-round">
+                <div class="fab-inner">
+                    <i class="fa-solid fa-plus"></i>
+                </div>
+            </button>
+            <button class="nav-item" data-target="view-leaderboard">
+                <i class="fa-solid fa-ranking-star"></i>
+                <span>Ranks</span>
+            </button>
+            <button class="nav-item" data-target="view-settle">
+                <i class="fa-solid fa-wallet"></i>
+                <span>Settle</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- Custom Confirm Modal (replaces native confirm()) -->
+    <div class="modal-overlay" id="confirm-modal">
+        <div class="modal-box" style="max-width:340px;">
+            <div class="modal-header">
+                <h3 id="confirm-modal-title"><i class="fa-solid fa-triangle-exclamation" style="color:var(--danger)"></i> Confirm</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p id="confirm-modal-msg" style="font-size:0.95rem; line-height:1.5; margin-bottom:1rem;"></p>
+                <div style="display:flex; gap:0.7rem;">
+                    <button class="btn full-width" id="confirm-modal-cancel" style="background:var(--card-bg); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1);">Cancel</button>
+                    <button class="btn btn-gold full-width" id="confirm-modal-ok" style="background:var(--danger);">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sync Configuration Modal -->
+    <div class="modal-overlay" id="sync-modal">
+        <div class="modal-box">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-cloud gold-text"></i> Cloud Sync</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="subtitle">Paste your Firebase config JSON to sync live across devices.</p>
+                <textarea id="firebase-config" rows="5" placeholder='{"apiKey": "...", "databaseURL": "...", ...}'></textarea>
+                <input type="text" id="room-id" placeholder="Room ID (same for all players)" value="room-123">
+                <button class="btn btn-gold full-width" id="btn-save-sync"><i class="fa-solid fa-link"></i> Connect</button>
+                <div id="sync-status" class="sync-status"><i class="fa-solid fa-circle-info"></i> Offline — scores saved locally</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(()=>{}); });
+        }
+    </script>
+</body>
+</html>
