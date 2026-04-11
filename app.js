@@ -72,9 +72,10 @@ function migrateRoundData() {
 
 function saveState() {
     localStorage.setItem('3PattiProState', JSON.stringify(state));
-    if (window.db && window.currentUser) {
-        window.db.collection('teen-patti-scores').doc('state').set(state)
-            .catch(err => console.error("Cloud Error: ", err));
+    // If hosting, broadcast state changes to all connected viewers instantly
+    if (window.isHost && window.peerConns && window.peerConns.length > 0) {
+        const payload = JSON.stringify(state);
+        window.peerConns.forEach(conn => conn.send(payload));
     }
 }
 
@@ -1275,11 +1276,141 @@ document.querySelectorAll('.nav-item').forEach(item => {
     });
 });
 
+// ====== P2P SYNC (PeerJS) ======
+window.peer = null;
+window.peerConns = []; // Host holds multiple viewers
+window.clientConn = null; // Viewer holds connection to Host
+window.isHost = false;
+window.isClient = false;
+
+function renderSyncStatus() {
+    const setupPanel = document.getElementById('p2p-setup-panel');
+    const hostPanel = document.getElementById('p2p-host-panel');
+    const clientPanel = document.getElementById('p2p-client-panel');
+    const statusTxt = document.getElementById('sync-status');
+
+    if (window.isHost) {
+        setupPanel.style.display = 'none';
+        hostPanel.style.display = 'block';
+        clientPanel.style.display = 'none';
+        statusTxt.innerHTML = '<i class="fa-solid fa-tower-broadcast"></i> Serving data to Viewers...';
+        statusTxt.style.color = 'var(--gold-primary)';
+    } else if (window.isClient) {
+        setupPanel.style.display = 'none';
+        hostPanel.style.display = 'none';
+        clientPanel.style.display = 'block';
+        statusTxt.innerHTML = '<i class="fa-solid fa-wifi"></i> Live: Receiving scores...';
+        statusTxt.style.color = 'var(--blue-primary)';
+    } else {
+        setupPanel.style.display = 'block';
+        hostPanel.style.display = 'none';
+        clientPanel.style.display = 'none';
+        statusTxt.innerHTML = '<i class="fa-solid fa-circle-info"></i> Offline — scores saved locally';
+        statusTxt.style.color = 'var(--text-muted)';
+    }
+    renderAll();
+}
+
+function stopP2P() {
+    if (window.peer) window.peer.destroy();
+    window.peer = null;
+    window.peerConns = [];
+    window.clientConn = null;
+    window.isHost = false;
+    window.isClient = false;
+    renderSyncStatus();
+}
+
+document.getElementById('btn-host-game').addEventListener('click', () => {
+    const pin = Math.floor(1000 + Math.random() * 9000);
+    const roomName = '3pattipro-' + pin;
+    
+    stopP2P();
+    showToast('Starting broadcast...');
+    
+    // Create new PeerJS host
+    window.peer = new Peer(roomName);
+    
+    window.peer.on('open', (id) => {
+        window.isHost = true;
+        document.getElementById('display-room-pin').textContent = pin;
+        renderSyncStatus();
+        showToast('Hosting on PIN: ' + pin);
+    });
+
+    window.peer.on('connection', (conn) => {
+        window.peerConns.push(conn);
+        document.getElementById('host-connections-count').textContent = window.peerConns.length + ' friends connected.';
+        
+        // Immediately send current state to the new viewer
+        conn.on('open', () => {
+            conn.send(JSON.stringify(state));
+        });
+
+        conn.on('close', () => {
+            window.peerConns = window.peerConns.filter(c => c !== conn);
+            document.getElementById('host-connections-count').textContent = window.peerConns.length + ' friends connected.';
+        });
+    });
+
+    window.peer.on('error', (err) => {
+        console.error(err);
+        showToast('Host Error: ' + err.type);
+    });
+});
+
+document.getElementById('btn-join-game').addEventListener('click', () => {
+    const pin = document.getElementById('join-pin').value.trim();
+    if (!pin || pin.length !== 4) {
+        showToast('Enter a valid 4-digit PIN');
+        return;
+    }
+
+    stopP2P();
+    showToast('Connecting...');
+
+    window.peer = new Peer();
+    
+    window.peer.on('open', () => {
+        const destRoom = '3pattipro-' + pin;
+        window.clientConn = window.peer.connect(destRoom);
+
+        window.clientConn.on('open', () => {
+            window.isClient = true;
+            renderSyncStatus();
+            showToast('Connected as Viewer! 👁️');
+        });
+
+        window.clientConn.on('data', (data) => {
+            // Receive live updates
+            state = JSON.parse(data);
+            localStorage.setItem('3PattiProState', JSON.stringify(state));
+            renderAll(); // Renders the new changes immediately
+        });
+
+        window.clientConn.on('close', () => {
+            stopP2P();
+            showToast('Lost connection to Host.');
+        });
+    });
+
+    window.peer.on('error', (err) => {
+        console.error(err);
+        showToast('Connection failed.');
+        stopP2P();
+    });
+});
+
+document.getElementById('btn-disconnect-host').addEventListener('click', stopP2P);
+document.getElementById('btn-disconnect-client').addEventListener('click', stopP2P);
+
+window.isViewerMode = function() {
+    return window.isClient === true;
+};
+
 // Sync modal
 document.getElementById('btn-sync').addEventListener('click', () => {
     document.getElementById('sync-modal').classList.add('active');
-    const existing = localStorage.getItem('fb-config');
-    if (existing) document.getElementById('firebase-config').value = existing;
 });
 document.querySelectorAll('.close-modal').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1287,117 +1418,7 @@ document.querySelectorAll('.close-modal').forEach(btn => {
     });
 });
 
-window.db = null;
-window.auth = null;
-window.currentUser = null;
-
-function renderSyncStatus() {
-    const stat = document.getElementById('sync-status');
-    const panel = document.getElementById('firebase-setup-panel');
-    const adminPanel = document.getElementById('logged-in-admin-panel');
-
-    if (window.db) {
-        if (window.currentUser) {
-            stat.innerHTML = '<i class="fa-solid fa-circle-check"></i> Online — Logged in as Admin';
-            stat.style.color = 'var(--success)';
-            panel.style.display = 'none';
-            adminPanel.style.display = 'block';
-        } else {
-            stat.innerHTML = '<i class="fa-solid fa-cloud"></i> Online — Connected as Viewer';
-            stat.style.color = '#3b82f6';
-            panel.style.display = 'block';
-            adminPanel.style.display = 'none';
-        }
-    } else {
-        stat.innerHTML = '<i class="fa-solid fa-circle-info"></i> Offline — scores saved locally';
-        stat.style.color = 'var(--text-muted)';
-        panel.style.display = 'block';
-        adminPanel.style.display = 'none';
-    }
-}
-
-function initFirebase(configStr) {
-    try {
-        const config = JSON.parse(configStr);
-        if (!firebase.apps.length) {
-            firebase.initializeApp(config);
-        }
-        window.db = firebase.firestore();
-        window.auth = firebase.auth();
-
-        // Listen for admin auth state
-        window.auth.onAuthStateChanged(user => {
-            window.currentUser = user;
-            renderSyncStatus();
-            renderAll();
-        });
-
-        // Listen for live database updates
-        window.db.collection('teen-patti-scores').doc('state').onSnapshot(doc => {
-            if (doc.exists) {
-                // If we are viewers, we pull and render live
-                if (!window.currentUser) {
-                    state = doc.data();
-                    localStorage.setItem('3PattiProState', JSON.stringify(state));
-                    renderAll();
-                }
-            }
-        });
-
-        renderSyncStatus();
-    } catch (e) {
-        showToast('Invalid Firebase Config JSON ❌');
-        console.error(e);
-    }
-}
-
-document.getElementById('btn-save-sync').addEventListener('click', () => {
-    const configVal = document.getElementById('firebase-config').value.trim();
-    const email = document.getElementById('admin-email').value.trim();
-    const pwd = document.getElementById('admin-pwd').value.trim();
-
-    if (!configVal) {
-        showToast('Config cannot be empty');
-        return;
-    }
-    
-    // Save locally
-    localStorage.setItem('fb-config', configVal);
-    initFirebase(configVal);
-
-    if (email && pwd && window.auth) {
-        window.auth.signInWithEmailAndPassword(email, pwd).then(() => {
-            showToast('Logged in as Admin 🔐');
-            // Re-upload current local state logic to cloud
-            saveState();
-        }).catch(err => {
-            showToast('Login Failed: ' + err.message);
-        });
-    } else {
-        showToast('Connected as Viewer 👁️');
-    }
-});
-
-document.getElementById('btn-logout').addEventListener('click', () => {
-    if (window.auth) {
-        window.auth.signOut().then(() => {
-            showToast('Logged out');
-            localStorage.removeItem('fb-config');
-            location.reload(); // Refresh to clean slate
-        });
-    }
-});
-
-window.isViewerMode = function() {
-    return window.db !== null && window.currentUser === null;
-};
-
 // ====== INIT ======
-const savedConfig = localStorage.getItem('fb-config');
-if (savedConfig) {
-    // Wait slightly to ensure Firebase SDKs are loaded from the internet
-    setTimeout(() => initFirebase(savedConfig), 500);
-}
 
 migrateOldState();
 migrateRoundData();

@@ -202,35 +202,41 @@
                 <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="modal-body" id="sync-modal-body">
-                <div id="firebase-setup-panel">
-                    <p class="subtitle">Enter Firebase Config to connect this device to the live cloud scoreboard.</p>
-                    <textarea id="firebase-config" rows="4" placeholder='{"apiKey": "...", "projectId": "...", ...}' style="font-size:0.75rem; margin-bottom: 0.5rem; width: 100%; border-radius: 8px; padding: 0.5rem; background: var(--bg-primary); border: 1px solid rgba(255,255,255,0.1); color: var(--text-primary); resize: vertical;"></textarea>
+                
+                <!-- If Not Connected -->
+                <div id="p2p-setup-panel">
+                    <p class="subtitle" style="margin-bottom:1.5rem">Connect devices instantly without any accounts!</p>
                     
-                    <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; margin-top: 0.5rem;">
-                        <p class="subtitle"><i class="fa-solid fa-lock"></i> Admin Login (To insert scores)</p>
-                        <input type="email" id="admin-email" placeholder="Admin Email" style="margin-bottom:0.5rem;" autocomplete="email">
-                        <input type="password" id="admin-pwd" placeholder="Password" style="margin-bottom:0.8rem;">
-                        
-                        <button class="btn btn-gold full-width" id="btn-save-sync"><i class="fa-solid fa-link"></i> Connect & Login</button>
+                    <button class="btn btn-gold full-width" id="btn-host-game" style="margin-bottom:1rem; padding:1rem; font-size:1.1rem;"><i class="fa-solid fa-tower-broadcast"></i> Host Game (I am Admin)</button>
+                    
+                    <div style="display:flex; gap:0.5rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
+                        <input type="number" id="join-pin" placeholder="ENTER 4-DIGIT PIN" maxlength="4" style="flex: 2; text-align:center; font-size:1.1rem; letter-spacing: 2px; font-weight:700;">
+                        <button class="btn full-width" id="btn-join-game" style="flex:1; background:var(--blue-primary);"><i class="fa-solid fa-right-to-bracket"></i> Join</button>
                     </div>
                 </div>
-                
-                <div id="logged-in-admin-panel" style="display:none; text-align:center;">
-                    <b class="text-success" style="margin-bottom: 0.7rem; display:block; font-size:1.1rem;"><i class="fa-solid fa-user-shield"></i> You are Admin</b>
-                    <p class="subtitle" style="margin-bottom:1rem;">Your changes are syncing to the cloud live!</p>
-                    <button class="btn full-width" id="btn-logout" style="background:var(--danger);">Logout & Disconnect</button>
+
+                <!-- If Connected as Admin -->
+                <div id="p2p-host-panel" style="display:none; text-align:center;">
+                    <h3 class="text-success" style="margin-bottom: 0.5rem;"><i class="fa-solid fa-user-shield"></i> You are Hosting</h3>
+                    <p class="subtitle">Tell your friends to join using this PIN:</p>
+                    <div style="font-size:3.5rem; font-weight:800; letter-spacing:8px; color:var(--gold-primary); margin: 1rem 0; text-shadow: 0px 4px 10px rgba(212,175,55,0.4);" id="display-room-pin">----</div>
+                    <p class="subtitle" id="host-connections-count">0 friends connected.</p>
+                    <button class="btn full-width" id="btn-disconnect-host" style="background:var(--danger); margin-top:1rem;">End Session</button>
                 </div>
 
-                <div id="sync-status" class="sync-status" style="margin-top: 1rem;"><i class="fa-solid fa-circle-info"></i> Offline — scores saved locally</div>
+                <!-- If Connected as Viewer -->
+                <div id="p2p-client-panel" style="display:none; text-align:center;">
+                    <h3 class="text-success" style="margin-bottom: 0.5rem;"><i class="fa-solid fa-eye"></i> Connected!</h3>
+                    <p class="subtitle" style="margin-bottom:1rem;">You are receiving live score updates from the host.</p>
+                    <button class="btn full-width" id="btn-disconnect-client" style="background:var(--danger);">Disconnect</button>
+                </div>
+
+                <div id="sync-status" class="sync-status" style="margin-top: 1.5rem;"><i class="fa-solid fa-wifi"></i> Offline — scores saved locally</div>
             </div>
         </div>
     </div>
 
-    <!-- FIREBASE SDKs (Compat version for Vanilla JS) -->
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
-
+    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
     <script src="app.js"></script>
     <script>
         if ('serviceWorker' in navigator) {
