@@ -72,6 +72,10 @@ function migrateRoundData() {
 
 function saveState() {
     localStorage.setItem('3PattiProState', JSON.stringify(state));
+    if (window.db && window.currentUser) {
+        window.db.collection('teen-patti-scores').doc('state').set(state)
+            .catch(err => console.error("Cloud Error: ", err));
+    }
 }
 
 // ====== NAVIGATION ======
@@ -80,6 +84,10 @@ let tempActiveSelection = [];
 
 function navTo(targetId) {
     if (targetId === 'view-round') {
+        if (typeof window.isViewerMode === 'function' && window.isViewerMode()) {
+            showToast('Viewers cannot add rounds 🚫');
+            return;
+        }
         if (currentPlayers.length > 0) {
             // Ask: Do you want to change players?
             if (confirm("Do you want to change players?")) {
@@ -388,6 +396,27 @@ function renderAll() {
 }
 
 function renderDashboard() {
+    // Viewer UI restrictions
+    const acts = document.querySelectorAll('.action-card');
+    const txtBtns = document.querySelectorAll('.text-btn');
+    if (typeof window.isViewerMode === 'function' && window.isViewerMode()) {
+        acts.forEach(b => {
+             b.style.opacity = '0.4';
+             b.onclick = () => showToast('Admin feature only');
+        });
+        txtBtns.forEach(b => b.style.display = 'none');
+    } else {
+        acts.forEach((b, i) => {
+            b.style.opacity = '1';
+            // Restoring onclicks if they logged back in
+            if (i===0) b.onclick = () => navTo('view-round');
+            if (i===1) b.onclick = () => navTo('view-players');
+            if (i===2) b.onclick = () => navTo('view-settle');
+            if (i===3) b.onclick = () => undoLastRound();
+        });
+        txtBtns.forEach(b => b.style.display = 'inline-block');
+    }
+
     // Apply date filter for dashboard analytics
     const filteredRounds = filterRoundsByDate(state.history, activeFilter);
 
@@ -517,6 +546,13 @@ function renderPlayers() {
     const pl = document.getElementById('players-list');
     const inaPl = document.getElementById('inactive-players-list');
     const inaTitle = document.getElementById('inactive-title');
+    const addForm = document.getElementById('add-player-form');
+
+    if (typeof window.isViewerMode === 'function' && window.isViewerMode()) {
+        if (addForm) addForm.style.display = 'none';
+    } else {
+        if (addForm) addForm.style.display = 'flex';
+    }
 
     const active = state.totalPlayers.filter(p => state.activePlayers.includes(String(p.id)));
     const inactive = state.totalPlayers.filter(p => !state.activePlayers.includes(String(p.id)));
@@ -539,8 +575,8 @@ function renderPlayers() {
                 </div>
                 <div style="display:flex; align-items:center; gap: 0.8rem;">
                     <span class="player-score ${clr}">${bal >= 0 ? '+' : ''}${bal}</span>
-                    <button class="icon-btn" onclick="togglePlayer('${p.id}')" title="Bench player"><i class="fa-solid fa-moon text-muted"></i></button>
-                    <button class="icon-btn" onclick="removePlayer('${p.id}')" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
+                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `togglePlayer('${p.id}')`}" title="Bench player"><i class="fa-solid fa-moon text-muted"></i></button>
+                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `removePlayer('${p.id}')`}" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
                 </div>
             </div>`;
         }).join('');
@@ -559,8 +595,8 @@ function renderPlayers() {
                 </div>
                 <div style="display:flex; align-items:center; gap: 0.8rem;">
                     <span class="player-score ${clr}">${bal}</span>
-                    <button class="icon-btn text-success" onclick="togglePlayer('${p.id}')" title="Restore"><i class="fa-solid fa-rotate-left"></i></button>
-                    <button class="icon-btn" onclick="removePlayer('${p.id}')" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
+                    <button class="icon-btn text-success" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `togglePlayer('${p.id}')`}" title="Restore"><i class="fa-solid fa-rotate-left"></i></button>
+                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `removePlayer('${p.id}')`}" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
                 </div>
             </div>`;
         }).join('');
@@ -1242,17 +1278,127 @@ document.querySelectorAll('.nav-item').forEach(item => {
 // Sync modal
 document.getElementById('btn-sync').addEventListener('click', () => {
     document.getElementById('sync-modal').classList.add('active');
+    const existing = localStorage.getItem('fb-config');
+    if (existing) document.getElementById('firebase-config').value = existing;
 });
 document.querySelectorAll('.close-modal').forEach(btn => {
     btn.addEventListener('click', () => {
         document.querySelectorAll('.modal-overlay').forEach(m => m.classList.remove('active'));
     });
 });
+
+window.db = null;
+window.auth = null;
+window.currentUser = null;
+
+function renderSyncStatus() {
+    const stat = document.getElementById('sync-status');
+    const panel = document.getElementById('firebase-setup-panel');
+    const adminPanel = document.getElementById('logged-in-admin-panel');
+
+    if (window.db) {
+        if (window.currentUser) {
+            stat.innerHTML = '<i class="fa-solid fa-circle-check"></i> Online — Logged in as Admin';
+            stat.style.color = 'var(--success)';
+            panel.style.display = 'none';
+            adminPanel.style.display = 'block';
+        } else {
+            stat.innerHTML = '<i class="fa-solid fa-cloud"></i> Online — Connected as Viewer';
+            stat.style.color = '#3b82f6';
+            panel.style.display = 'block';
+            adminPanel.style.display = 'none';
+        }
+    } else {
+        stat.innerHTML = '<i class="fa-solid fa-circle-info"></i> Offline — scores saved locally';
+        stat.style.color = 'var(--text-muted)';
+        panel.style.display = 'block';
+        adminPanel.style.display = 'none';
+    }
+}
+
+function initFirebase(configStr) {
+    try {
+        const config = JSON.parse(configStr);
+        if (!firebase.apps.length) {
+            firebase.initializeApp(config);
+        }
+        window.db = firebase.firestore();
+        window.auth = firebase.auth();
+
+        // Listen for admin auth state
+        window.auth.onAuthStateChanged(user => {
+            window.currentUser = user;
+            renderSyncStatus();
+            renderAll();
+        });
+
+        // Listen for live database updates
+        window.db.collection('teen-patti-scores').doc('state').onSnapshot(doc => {
+            if (doc.exists) {
+                // If we are viewers, we pull and render live
+                if (!window.currentUser) {
+                    state = doc.data();
+                    localStorage.setItem('3PattiProState', JSON.stringify(state));
+                    renderAll();
+                }
+            }
+        });
+
+        renderSyncStatus();
+    } catch (e) {
+        showToast('Invalid Firebase Config JSON ❌');
+        console.error(e);
+    }
+}
+
 document.getElementById('btn-save-sync').addEventListener('click', () => {
-    showToast('Firebase support coming soon! 🔥');
+    const configVal = document.getElementById('firebase-config').value.trim();
+    const email = document.getElementById('admin-email').value.trim();
+    const pwd = document.getElementById('admin-pwd').value.trim();
+
+    if (!configVal) {
+        showToast('Config cannot be empty');
+        return;
+    }
+    
+    // Save locally
+    localStorage.setItem('fb-config', configVal);
+    initFirebase(configVal);
+
+    if (email && pwd && window.auth) {
+        window.auth.signInWithEmailAndPassword(email, pwd).then(() => {
+            showToast('Logged in as Admin 🔐');
+            // Re-upload current local state logic to cloud
+            saveState();
+        }).catch(err => {
+            showToast('Login Failed: ' + err.message);
+        });
+    } else {
+        showToast('Connected as Viewer 👁️');
+    }
 });
 
+document.getElementById('btn-logout').addEventListener('click', () => {
+    if (window.auth) {
+        window.auth.signOut().then(() => {
+            showToast('Logged out');
+            localStorage.removeItem('fb-config');
+            location.reload(); // Refresh to clean slate
+        });
+    }
+});
+
+window.isViewerMode = function() {
+    return window.db !== null && window.currentUser === null;
+};
+
 // ====== INIT ======
+const savedConfig = localStorage.getItem('fb-config');
+if (savedConfig) {
+    // Wait slightly to ensure Firebase SDKs are loaded from the internet
+    setTimeout(() => initFirebase(savedConfig), 500);
+}
+
 migrateOldState();
 migrateRoundData();
 renderAll();

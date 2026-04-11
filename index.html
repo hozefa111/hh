@@ -198,18 +198,38 @@
     <div class="modal-overlay" id="sync-modal">
         <div class="modal-box">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-cloud gold-text"></i> Cloud Sync</h3>
+                <h3><i class="fa-solid fa-cloud gold-text"></i> Cloud Sync & Admin</h3>
                 <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
             </div>
-            <div class="modal-body">
-                <p class="subtitle">Paste your Firebase config JSON to sync live across devices.</p>
-                <textarea id="firebase-config" rows="5" placeholder='{"apiKey": "...", "databaseURL": "...", ...}'></textarea>
-                <input type="text" id="room-id" placeholder="Room ID (same for all players)" value="room-123">
-                <button class="btn btn-gold full-width" id="btn-save-sync"><i class="fa-solid fa-link"></i> Connect</button>
-                <div id="sync-status" class="sync-status"><i class="fa-solid fa-circle-info"></i> Offline — scores saved locally</div>
+            <div class="modal-body" id="sync-modal-body">
+                <div id="firebase-setup-panel">
+                    <p class="subtitle">Enter Firebase Config to connect this device to the live cloud scoreboard.</p>
+                    <textarea id="firebase-config" rows="4" placeholder='{"apiKey": "...", "projectId": "...", ...}' style="font-size:0.75rem; margin-bottom: 0.5rem; width: 100%; border-radius: 8px; padding: 0.5rem; background: var(--bg-primary); border: 1px solid rgba(255,255,255,0.1); color: var(--text-primary); resize: vertical;"></textarea>
+                    
+                    <div style="border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1rem; margin-top: 0.5rem;">
+                        <p class="subtitle"><i class="fa-solid fa-lock"></i> Admin Login (To insert scores)</p>
+                        <input type="email" id="admin-email" placeholder="Admin Email" style="margin-bottom:0.5rem;" autocomplete="email">
+                        <input type="password" id="admin-pwd" placeholder="Password" style="margin-bottom:0.8rem;">
+                        
+                        <button class="btn btn-gold full-width" id="btn-save-sync"><i class="fa-solid fa-link"></i> Connect & Login</button>
+                    </div>
+                </div>
+                
+                <div id="logged-in-admin-panel" style="display:none; text-align:center;">
+                    <b class="text-success" style="margin-bottom: 0.7rem; display:block; font-size:1.1rem;"><i class="fa-solid fa-user-shield"></i> You are Admin</b>
+                    <p class="subtitle" style="margin-bottom:1rem;">Your changes are syncing to the cloud live!</p>
+                    <button class="btn full-width" id="btn-logout" style="background:var(--danger);">Logout & Disconnect</button>
+                </div>
+
+                <div id="sync-status" class="sync-status" style="margin-top: 1rem;"><i class="fa-solid fa-circle-info"></i> Offline — scores saved locally</div>
             </div>
         </div>
     </div>
+
+    <!-- FIREBASE SDKs (Compat version for Vanilla JS) -->
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
 
     <script src="app.js"></script>
     <script>
