@@ -318,7 +318,7 @@ window.onLeaderboardYearChange = function(val) {
 };
 
 // ====== SCORE RECOMPUTATION ENGINE & ANALYTICS ======
-function getGameAnalytics(rounds, players) {
+function computeGameAnalytics(rounds, players) {
     const analytics = {
         totalRounds: rounds.length,
         bidFrequency: {},
@@ -379,7 +379,7 @@ function getGameAnalytics(rounds, players) {
     return analytics;
 }
 // Expose analytics globally for console access
-window.getGameAnalytics = function() { return getGameAnalytics(state.history, state.totalPlayers); };
+window.getGameAnalytics = function() { return computeGameAnalytics(state.history, state.totalPlayers); };
 
 // ====== RENDERERS ======
 function renderAll() {
@@ -435,7 +435,7 @@ function renderDashboard() {
     }
 
     // Compute analytics from filtered rounds only
-    const analytics = getGameAnalytics(filteredRounds, state.totalPlayers);
+    const analytics = computeGameAnalytics(filteredRounds, state.totalPlayers);
 
     // --- Bid Frequency ---
     const sortedBids = Object.entries(analytics.bidFrequency).sort((a, b) => b[1] - a[1]);
