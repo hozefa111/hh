@@ -53,6 +53,8 @@ function migrateOldState() {
 // Migrate rounds: ensure every round has an ISO date string and string result
 function migrateRoundData() {
     let changed = false;
+    if (!state.history) state.history = [];
+    
     state.history.forEach(round => {
         // Ensure date field exists as ISO string
         if (!round.date) {
@@ -65,6 +67,13 @@ function migrateRoundData() {
             changed = true;
         } else if (round.result === false) {
             round.result = 'lose';
+            changed = true;
+        }
+        
+        // --- NEW: Fix corrupted Round 1001 / Missing Deltas ---
+        if (!round.deltas && round.players && round.bid && round.hukum !== undefined) {
+            console.log(`Migrating round ${round.id} - computing missing deltas`);
+            round.deltas = calculateGameScores(round.players, round.bid, round.hukum, round.partners || [], round.result);
             changed = true;
         }
     });
@@ -176,8 +185,11 @@ function getPlayerBalanceFromRounds(pid, rounds) {
     const key = String(pid);
     let score = 0;
     rounds.forEach(r => {
-        if (r.players && r.bid) {
-            const deltas = calculateGameScores(r.players, r.bid, r.hukum, r.partners, r.result);
+        // Defensive check: ensure r exists
+        if (!r) return;
+        
+        if (r.players && r.bid && r.hukum !== undefined) {
+            const deltas = calculateGameScores(r.players, r.bid, r.hukum, r.partners || [], r.result);
             score += (deltas[key] || 0);
         } else if (r.deltas) {
             score += (r.deltas[key] || 0);
@@ -192,7 +204,8 @@ function getPlayerBalance(pid) {
 
 function getPlayerTotalRounds(pid) {
     const key = String(pid);
-    return state.history.filter(r => r.deltas[key] !== undefined).length;
+    if (!state.history) return 0;
+    return state.history.filter(r => r && r.deltas && r.deltas[key] !== undefined).length;
 }
 
 function getInitials(name) {
