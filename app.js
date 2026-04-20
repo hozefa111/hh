@@ -169,7 +169,7 @@ function getPlayerBalance(pid) {
 
 function getPlayerTotalRounds(pid) {
     const key = String(pid);
-    return state.history.filter(r => r.deltas[key] !== undefined).length;
+    return state.history.filter(r => r.deltas && r.deltas[key] !== undefined).length;
 }
 
 function getInitials(name) {
@@ -576,8 +576,8 @@ function renderPlayers() {
                 </div>
                 <div style="display:flex; align-items:center; gap: 0.8rem;">
                     <span class="player-score ${clr}">${bal >= 0 ? '+' : ''}${bal}</span>
-                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `togglePlayer('${p.id}')`}" title="Bench player"><i class="fa-solid fa-moon text-muted"></i></button>
-                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `removePlayer('${p.id}')`}" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
+                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? `showToast(&apos;Admin only&apos;)` : `togglePlayer('${p.id}')`}" title="Bench player"><i class="fa-solid fa-moon text-muted"></i></button>
+                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? `showToast(&apos;Admin only&apos;)` : `removePlayer('${p.id}')`}" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
                 </div>
             </div>`;
         }).join('');
@@ -596,8 +596,8 @@ function renderPlayers() {
                 </div>
                 <div style="display:flex; align-items:center; gap: 0.8rem;">
                     <span class="player-score ${clr}">${bal}</span>
-                    <button class="icon-btn text-success" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `togglePlayer('${p.id}')`}" title="Restore"><i class="fa-solid fa-rotate-left"></i></button>
-                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? 'showToast(\\'Admin only\\')' : `removePlayer('${p.id}')`}" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
+                    <button class="icon-btn text-success" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? `showToast(&apos;Admin only&apos;)` : `togglePlayer('${p.id}')`}" title="Restore"><i class="fa-solid fa-rotate-left"></i></button>
+                    <button class="icon-btn" onclick="${typeof window.isViewerMode === 'function' && window.isViewerMode() ? `showToast(&apos;Admin only&apos;)` : `removePlayer('${p.id}')`}" title="Remove player"><i class="fa-solid fa-trash-can" style="color:var(--danger);font-size:0.85rem"></i></button>
                 </div>
             </div>`;
         }).join('');
@@ -757,7 +757,7 @@ window.onHukumSelect = function(pid) {
     roundState.hukum = pid;
     roundState.partners = []; // Reset partners when hukum changes
 
-    const active = state.totalPlayers.filter(p => state.activePlayers.includes(String(p.id)));
+    const active = state.totalPlayers.filter(p => currentPlayers.includes(String(p.id)));
 
     // Update hukum visual indicators
     active.forEach(p => {
