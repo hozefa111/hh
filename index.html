@@ -226,6 +226,26 @@
         </div>
     </div>
 
+    <!-- Clear Data Modal -->
+    <div class="modal-overlay" id="clear-data-modal">
+        <div class="modal-box" style="max-width:340px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-radiation" style="color:var(--danger)"></i> Danger Zone</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.95rem; line-height:1.5; margin-bottom:1rem;">Type CONFIRM to delete all data permanently</p>
+                <input type="text" id="clear-data-input" placeholder="CONFIRM" autocomplete="off"
+                    style="width:100%; padding:0.8rem; margin-bottom:0.5rem; background:var(--bg-nav); border:1px solid rgba(255,255,255,0.1); border-radius:var(--radius-sm); color:var(--text-primary); font-size:1rem; outline:none; text-align:center; font-weight:bold; letter-spacing:2px;">
+                <div id="clear-data-error" style="color:var(--danger); font-size:0.85rem; margin-bottom:1rem; display:none; text-align:center;">Type CONFIRM in uppercase to proceed</div>
+                <div style="display:flex; gap:0.7rem; margin-top:0.5rem;">
+                    <button class="btn full-width" onclick="closeModal('clear-data-modal')" style="background:var(--card-bg); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1);">Cancel</button>
+                    <button class="btn btn-gold full-width" id="clear-data-confirm-btn" onclick="executeClearAllData()" style="background:var(--danger);">Delete Everything</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Session Summary Modal -->
     <div class="modal-overlay" id="session-modal">
         <div class="modal-box session-modal-box">

@@ -743,13 +743,21 @@ function renderSessionControls() {
             <button class="btn btn-danger btn-session" onclick="endSession()">
                 <i class="fa-solid fa-flag-checkered"></i> End
             </button>
-        </div>`;
+        </div>
+        <!-- Clear Data Button -->
+        <button class="btn btn-danger full-width" onclick="initiateClearAllData()" style="margin-top:1rem; background:transparent; border:1px solid var(--danger); padding:0.6rem;">
+            <i class="fa-solid fa-triangle-exclamation"></i> Clear All Data
+        </button>`;
     } else {
         container.innerHTML = `<div style="margin-bottom:1.5rem;">
             <button class="btn btn-gold full-width btn-session" onclick="startSession()">
                 <i class="fa-solid fa-play"></i> Start Session
             </button>
-        </div>`;
+        </div>
+        <!-- Clear Data Button -->
+        <button class="btn btn-danger full-width" onclick="initiateClearAllData()" style="background:transparent; border:1px solid var(--danger); padding:0.6rem;">
+            <i class="fa-solid fa-triangle-exclamation"></i> Clear All Data
+        </button>`;
     }
 }
 
@@ -858,6 +866,65 @@ window.endSession = async function() {
     } catch (err) {
         console.error('End session error:', err);
         showToast('Failed to end session');
+    }
+};
+
+window.initiateClearAllData = function() {
+    showConfirm(
+        "Are you sure you want to clear all data?<br><br>This will delete all rounds, player scores and session history.",
+        "Clear All Data",
+        () => {
+            // Step 1 confirmed, open Step 2 modal
+            document.getElementById('clear-data-input').value = '';
+            document.getElementById('clear-data-error').style.display = 'none';
+            document.getElementById('clear-data-modal').classList.add('active');
+            setTimeout(() => document.getElementById('clear-data-input').focus(), 100);
+        }
+    );
+};
+
+window.executeClearAllData = async function() {
+    const input = document.getElementById('clear-data-input');
+    const err = document.getElementById('clear-data-error');
+    if (input.value !== 'CONFIRM') {
+        err.style.display = 'block';
+        return;
+    }
+    err.style.display = 'none';
+    closeModal('clear-data-modal');
+    
+    showToast('<i class="fa-solid fa-spinner fa-spin"></i> Deleting all data...', 5000);
+
+    try {
+        const batch = db.batch();
+        let count = 0;
+
+        // Delete all rounds
+        const allRounds = await db.collection('rounds').get();
+        allRounds.forEach(doc => {
+            batch.delete(doc.ref);
+            count++;
+        });
+
+        // Delete all sessions
+        const allSessions = await db.collection('sessions').get();
+        allSessions.forEach(doc => {
+            batch.delete(doc.ref);
+            count++;
+        });
+
+        if (count > 0) {
+            await batch.commit();
+        }
+
+        // Reset session meta
+        await db.collection('meta').doc('session').set({ isActive: false, startTime: null });
+
+        showToast('All data cleared successfully! \uD83D\uDDD1\uFE0F');
+        // The onSnapshot listeners will auto refresh Everything
+    } catch (error) {
+        console.error('Error clearing data:', error);
+        showToast('Failed to clear data \u26A0\uFE0F');
     }
 };
 
