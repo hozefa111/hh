@@ -50,15 +50,22 @@ auth.onAuthStateChanged(user => {
 function updateAuthUI() {
     const badge = document.getElementById('admin-badge');
     const authBtn = document.getElementById('btn-auth');
+    const fabBtn = document.querySelector('.center-fab');
 
     if (isAdminUser) {
         badge.style.display = 'inline-flex';
         authBtn.innerHTML = '<i class="fa-solid fa-right-from-bracket"></i>';
         authBtn.title = 'Logout';
+        if (fabBtn) fabBtn.style.display = '';
     } else {
         badge.style.display = 'none';
         authBtn.innerHTML = '<i class="fa-solid fa-right-to-bracket"></i>';
         authBtn.title = 'Login as Admin';
+        if (fabBtn) fabBtn.style.display = 'none';
+
+        if (activeViewId === 'view-round') {
+            navTo('view-home');
+        }
     }
 
     // Show/hide admin-only elements
@@ -238,6 +245,18 @@ document.querySelectorAll('.nav-item').forEach(item => {
     item.addEventListener('click', (e) => {
         const t = e.currentTarget.dataset.target;
         if (t) navTo(t);
+    });
+});
+
+window.closeModal = function(modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.remove('active');
+};
+
+document.querySelectorAll('.close-modal').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        const modal = e.target.closest('.modal-overlay');
+        if (modal) modal.classList.remove('active');
     });
 });
 
