@@ -1,5 +1,5 @@
-$root = "C:\Users\Lenovo\.gemini\antigravity\scratch\teen-patti-scores"
-$port = 9090
+$root = "C:\Users\Lenovo\.gemini\antigravity"
+$port = 8080
 $listener = [System.Net.HttpListener]::new()
 $listener.Prefixes.Add("http://localhost:$port/")
 $listener.Start()
@@ -28,6 +28,7 @@ while ($listener.IsListening) {
             ".json" { "application/json" }
             ".png"  { "image/png" }
             ".ico"  { "image/x-icon" }
+            ".webp" { "image/webp" }
             default { "application/octet-stream" }
         }
         $ctx.Response.ContentType = $ct

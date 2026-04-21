@@ -6,10 +6,10 @@
     <meta name="theme-color" content="#0a0a0c">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="description" content="Track 3 Patti scores like a pro — leaderboard, rounds, settle-up">
+    <meta name="description" content="Track 3 Patti scores like a pro — real-time leaderboard, hukum rounds, analytics with Firebase">
     <link rel="manifest" href="manifest.json">
     <title>3 Patti PRO — Score Tracker</title>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" href="style.css">
 </head>
@@ -22,15 +22,18 @@
                 <h1>3 Patti <span class="gold-text">PRO</span></h1>
             </div>
             <div class="header-actions">
-                <button class="icon-btn" id="btn-sync" title="Cloud Sync">
-                    <i class="fa-solid fa-cloud"></i>
+                <span class="admin-badge" id="admin-badge" style="display:none">
+                    <i class="fa-solid fa-shield-halved"></i> Admin
+                </span>
+                <button class="icon-btn" id="btn-auth" title="Login">
+                    <i class="fa-solid fa-right-to-bracket"></i>
                 </button>
             </div>
         </header>
 
         <!-- Main Content Area -->
         <main class="app-content" id="app-content">
-            
+
             <!-- VIEW: HOME (Dashboard) -->
             <div id="view-home" class="view active">
                 <div class="dashboard-hero">
@@ -50,16 +53,19 @@
                         </div>
                         <div class="stat-card">
                             <span class="stat-label">On Table</span>
-                            <span class="stat-value gold-text" id="stat-total-money">₹0</span>
+                            <span class="stat-value gold-text" id="stat-total-money">0</span>
                         </div>
                     </div>
                 </div>
+
+                <!-- Session Controls (Admin Only) -->
+                <div class="admin-only" id="session-controls"></div>
 
                 <div class="section-title">
                     <h3>Quick Actions</h3>
                 </div>
                 <div class="action-grid">
-                    <button class="action-card" onclick="navTo('view-round')">
+                    <button class="action-card" id="qa-new-round" onclick="navTo('view-round')">
                         <div class="action-icon bg-gold"><i class="fa-solid fa-plus"></i></div>
                         <span>New Round</span>
                     </button>
@@ -67,28 +73,18 @@
                         <div class="action-icon bg-blue"><i class="fa-solid fa-user-plus"></i></div>
                         <span>Players</span>
                     </button>
-                    <button class="action-card" onclick="navTo('view-settle')">
-                        <div class="action-icon bg-green"><i class="fa-solid fa-hand-holding-dollar"></i></div>
-                        <span>Settle Up</span>
+                    <button class="action-card" onclick="navTo('view-ranks')">
+                        <div class="action-icon bg-purple"><i class="fa-solid fa-ranking-star"></i></div>
+                        <span>Rankings</span>
                     </button>
-                    <button class="action-card" onclick="undoLastRound()">
-                        <div class="action-icon bg-red"><i class="fa-solid fa-rotate-left"></i></div>
-                        <span>Undo Round</span>
+                    <button class="action-card" onclick="navTo('view-history')">
+                        <div class="action-icon bg-green"><i class="fa-solid fa-clock-rotate-left"></i></div>
+                        <span>History</span>
                     </button>
                 </div>
 
                 <div class="section-title" style="margin-top: 1.5rem;">
-                    <div style="display:flex; justify-content:space-between; align-items:center;">
-                        <h3>Recent Activity</h3>
-                        <div style="display:flex; gap:0.5rem;">
-                            <button class="text-btn" onclick="resetGamePrompt()">
-                                <i class="fa-solid fa-rotate-left"></i> Reset Scores
-                            </button>
-                            <button class="text-btn" style="color:var(--danger);" onclick="deleteAllDataPrompt()">
-                                <i class="fa-solid fa-trash-can"></i> Delete All
-                            </button>
-                        </div>
-                    </div>
+                    <h3>Recent Activity</h3>
                 </div>
                 <div class="activity-feed" id="activity-feed">
                     <div class="empty-state-box">
@@ -102,52 +98,60 @@
             <div id="view-players" class="view">
                 <div class="sticky-header">
                     <h2>Manage Players</h2>
-                    <form id="add-player-form" class="flex-form">
+                    <form id="add-player-form" class="flex-form admin-only">
                         <input type="text" id="player-name" placeholder="Enter player name..." required autocomplete="off" maxlength="20">
                         <button type="submit" class="btn btn-gold"><i class="fa-solid fa-plus"></i> Add</button>
                     </form>
                 </div>
-                
                 <div class="players-list" id="players-list"></div>
-
-                <div class="section-title inactive-title" style="display: none;" id="inactive-title">
+                <div class="section-title inactive-title" style="display:none;" id="inactive-title">
                     <h3><i class="fa-solid fa-moon"></i> Benched Players</h3>
                 </div>
                 <div class="inactive-players-list" id="inactive-players-list"></div>
             </div>
 
-            <!-- VIEW: ADD ROUND -->
+            <!-- VIEW: ADD ROUND (Hukum Round) -->
             <div id="view-round" class="view">
-                <h2>Record New Round</h2>
-                <p class="subtitle">Enter each player's win (+) or loss (-) amount</p>
-                
-                <div class="round-calculator" id="round-calculator"></div>
-
+                <h2>New Hukum Round <i class="fa-solid fa-crown gold-text"></i></h2>
+                <p class="subtitle">Select bid, hukum, partners and result</p>
+                <div class="round-form-container" id="round-form-container"></div>
+                <div class="round-preview" id="round-preview" style="display:none"></div>
                 <div class="round-summary">
-                    <div class="balance-check" id="balance-check">
-                        Net: <span id="balance-sum">0</span>
-                    </div>
                     <button class="btn btn-gold full-width btn-xl" id="save-round-btn" disabled>
                         <i class="fa-solid fa-check-circle"></i> Save Round
                     </button>
                 </div>
             </div>
 
-            <!-- VIEW: LEADERBOARD -->
-            <div id="view-leaderboard" class="view">
-                <h2>Leaderboard <i class="fa-solid fa-trophy gold-text"></i></h2>
-                
-                <div class="podium-container" id="podium-container"></div>
-                <div class="leaderboard-list" id="leaderboard-list"></div>
+            <!-- VIEW: RANKS -->
+            <div id="view-ranks" class="view">
+                <div class="view-header-row">
+                    <h2>Rankings <i class="fa-solid fa-ranking-star gold-text"></i></h2>
+                    <button class="share-fab" onclick="shareLeaderboard()" title="Share Leaderboard">
+                        <i class="fa-solid fa-share-nodes"></i>
+                    </button>
+                </div>
+                <div id="ranks-filter-bar" class="filter-bar"></div>
+                <div id="ranks-table-container"></div>
             </div>
 
-            <!-- VIEW: SETTLE UP -->
-            <div id="view-settle" class="view">
-                <h2>Settle Up <i class="fa-solid fa-handshake gold-text"></i></h2>
-                <p class="subtitle">Who owes whom at the end of the game</p>
-                
-                <div class="settle-up-list" id="settle-up-list"></div>
+            <!-- VIEW: PLAYER PROFILE -->
+            <div id="view-profile" class="view">
+                <div id="profile-content"></div>
             </div>
+
+            <!-- VIEW: ROUND HISTORY -->
+            <div id="view-history" class="view">
+                <h2>Round History <i class="fa-solid fa-clock-rotate-left gold-text"></i></h2>
+                <div class="tab-bar" id="history-tab-bar">
+                    <button class="tab-pill active" data-tab="rounds" onclick="switchHistoryTab('rounds')">Rounds</button>
+                    <button class="tab-pill" data-tab="sessions" onclick="switchHistoryTab('sessions')">Sessions</button>
+                </div>
+                <div id="history-rounds-content"></div>
+                <div id="history-sessions-content" style="display:none"></div>
+            </div>
+
+
 
         </main>
 
@@ -166,18 +170,46 @@
                     <i class="fa-solid fa-plus"></i>
                 </div>
             </button>
-            <button class="nav-item" data-target="view-leaderboard">
+            <button class="nav-item" data-target="view-ranks">
                 <i class="fa-solid fa-ranking-star"></i>
                 <span>Ranks</span>
             </button>
-            <button class="nav-item" data-target="view-settle">
-                <i class="fa-solid fa-wallet"></i>
-                <span>Settle</span>
+            <button class="nav-item" data-target="view-history">
+                <i class="fa-solid fa-clock-rotate-left"></i>
+                <span>History</span>
             </button>
+
         </nav>
     </div>
 
-    <!-- Custom Confirm Modal (replaces native confirm()) -->
+    <!-- Login Modal -->
+    <div class="modal-overlay" id="login-modal">
+        <div class="modal-box" style="max-width:360px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-shield-halved gold-text"></i> Admin Login</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p class="subtitle" style="margin-bottom:1.2rem">Login to add rounds and manage players.</p>
+                <form id="login-form">
+                    <div style="margin-bottom:0.8rem;">
+                        <input type="email" id="login-email" placeholder="Email address" required
+                            style="width:100%; padding:0.9rem 1rem; background:var(--bg-nav); border:1px solid rgba(255,255,255,0.1); border-radius:var(--radius-sm); color:var(--text-primary); font-size:1rem; font-family:inherit; outline:none;">
+                    </div>
+                    <div style="margin-bottom:1rem;">
+                        <input type="password" id="login-password" placeholder="Password" required
+                            style="width:100%; padding:0.9rem 1rem; background:var(--bg-nav); border:1px solid rgba(255,255,255,0.1); border-radius:var(--radius-sm); color:var(--text-primary); font-size:1rem; font-family:inherit; outline:none;">
+                    </div>
+                    <div id="login-error" style="color:var(--danger); font-size:0.85rem; margin-bottom:0.8rem; display:none;"></div>
+                    <button type="submit" class="btn btn-gold full-width" id="login-submit-btn">
+                        <i class="fa-solid fa-right-to-bracket"></i> Login
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Confirm Modal -->
     <div class="modal-overlay" id="confirm-modal">
         <div class="modal-box" style="max-width:340px;">
             <div class="modal-header">
@@ -194,54 +226,40 @@
         </div>
     </div>
 
-    <!-- Sync Configuration Modal -->
-    <div class="modal-overlay" id="sync-modal">
-        <div class="modal-box">
+    <!-- Session Summary Modal -->
+    <div class="modal-overlay" id="session-modal">
+        <div class="modal-box session-modal-box">
             <div class="modal-header">
-                <h3><i class="fa-solid fa-cloud gold-text"></i> Cloud Sync & Admin</h3>
+                <h3><i class="fa-solid fa-flag-checkered gold-text"></i> Session Summary</h3>
                 <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
             </div>
-            <div class="modal-body" id="sync-modal-body">
-                
-                <!-- If Not Connected -->
-                <div id="p2p-setup-panel">
-                    <p class="subtitle" style="margin-bottom:1.5rem">Connect devices instantly without any accounts!</p>
-                    
-                    <button class="btn btn-gold full-width" id="btn-host-game" style="margin-bottom:1rem; padding:1rem; font-size:1.1rem;"><i class="fa-solid fa-tower-broadcast"></i> Host Game (I am Admin)</button>
-                    
-                    <div style="display:flex; gap:0.5rem; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 1.5rem;">
-                        <input type="number" id="join-pin" placeholder="ENTER 4-DIGIT PIN" maxlength="4" style="flex: 2; text-align:center; font-size:1.1rem; letter-spacing: 2px; font-weight:700;">
-                        <button class="btn full-width" id="btn-join-game" style="flex:1; background:var(--blue-primary);"><i class="fa-solid fa-right-to-bracket"></i> Join</button>
-                    </div>
-                </div>
-
-                <!-- If Connected as Admin -->
-                <div id="p2p-host-panel" style="display:none; text-align:center;">
-                    <h3 class="text-success" style="margin-bottom: 0.5rem;"><i class="fa-solid fa-user-shield"></i> You are Hosting</h3>
-                    <p class="subtitle">Tell your friends to join using this PIN:</p>
-                    <div style="font-size:3.5rem; font-weight:800; letter-spacing:8px; color:var(--gold-primary); margin: 1rem 0; text-shadow: 0px 4px 10px rgba(212,175,55,0.4);" id="display-room-pin">----</div>
-                    <p class="subtitle" id="host-connections-count">0 friends connected.</p>
-                    <button class="btn full-width" id="btn-disconnect-host" style="background:var(--danger); margin-top:1rem;">End Session</button>
-                </div>
-
-                <!-- If Connected as Viewer -->
-                <div id="p2p-client-panel" style="display:none; text-align:center;">
-                    <h3 class="text-success" style="margin-bottom: 0.5rem;"><i class="fa-solid fa-eye"></i> Connected!</h3>
-                    <p class="subtitle" style="margin-bottom:1rem;">You are receiving live score updates from the host.</p>
-                    <button class="btn full-width" id="btn-disconnect-client" style="background:var(--danger);">Disconnect</button>
-                </div>
-
-                <div id="sync-status" class="sync-status" style="margin-top: 1.5rem;"><i class="fa-solid fa-wifi"></i> Offline — scores saved locally</div>
-            </div>
+            <div class="modal-body" id="session-summary-body"></div>
         </div>
     </div>
 
-    <script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+    <!-- Round Share Prompt (overlay after saving) -->
+    <div class="modal-overlay" id="round-share-modal">
+        <div class="modal-box" style="max-width:380px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-check-circle" style="color:var(--success)"></i> Round Saved!</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="round-share-body"></div>
+        </div>
+    </div>
+
+    <!-- Hidden Share Card (captured by html2canvas) -->
+    <div id="share-card-wrapper" style="position:fixed; left:-9999px; top:0; z-index:-1;">
+        <div id="share-card"></div>
+    </div>
+
+    <!-- Firebase SDKs (v9 compat for vanilla JS) -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics-compat.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+    <script src="firebase-config.js"></script>
     <script src="app.js"></script>
-    <script>
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => { navigator.serviceWorker.register('./sw.js').catch(()=>{}); });
-        }
-    </script>
 </body>
 </html>
