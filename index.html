@@ -246,6 +246,25 @@
         </div>
     </div>
 
+    <!-- Start Session Modal -->
+    <div class="modal-overlay" id="start-session-modal">
+        <div class="modal-box" style="max-width:340px;">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-play gold-text"></i> Start Session</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.95rem; margin-bottom:1rem;">Enter a custom name for this session.</p>
+                <input type="text" id="start-session-name-input" placeholder="e.g. Sunday Game, Eid Special" autocomplete="off"
+                    style="width:100%; padding:0.8rem; margin-bottom:1rem; background:var(--bg-nav); border:1px solid rgba(255,255,255,0.1); border-radius:var(--radius-sm); color:var(--text-primary); font-size:1rem; outline:none;">
+                <div style="display:flex; gap:0.7rem;">
+                    <button class="btn full-width" onclick="executeStartSession(false)" style="background:var(--card-bg); color:var(--text-primary); border:1px solid rgba(255,255,255,0.1);">Skip</button>
+                    <button class="btn btn-gold full-width" onclick="executeStartSession(true)">Save</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Session Summary Modal -->
     <div class="modal-overlay" id="session-modal">
         <div class="modal-box session-modal-box">

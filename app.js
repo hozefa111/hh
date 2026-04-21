@@ -161,10 +161,11 @@ function initFirestoreListeners() {
             const data = doc.data();
             sessionState = {
                 isActive: data.isActive || false,
-                startTime: data.startTime ? data.startTime.toDate() : null
+                startTime: data.startTime ? data.startTime.toDate() : null,
+                customName: data.customName || null
             };
         } else {
-            sessionState = { isActive: false, startTime: null };
+            sessionState = { isActive: false, startTime: null, customName: null };
         }
         renderCurrentView();
     }, err => {
@@ -735,10 +736,11 @@ function renderSessionControls() {
 
     if (sessionState.isActive && sessionState.startTime) {
         const elapsed = Date.now() - sessionState.startTime.getTime();
+        const nameDisplay = sessionState.customName ? `\u2014 <b>${sanitizeHTML(sessionState.customName)}</b>` : '';
         container.innerHTML = `<div class="session-controls-bar">
             <div class="session-info">
                 <div class="session-status"><span class="session-active-dot"></span> Session Active</div>
-                <div class="session-timer">Started ${formatDateTime(sessionState.startTime)} \u2022 ${formatDuration(elapsed)}</div>
+                <div class="session-timer">Started ${formatDateTime(sessionState.startTime)} \u2022 ${formatDuration(elapsed)} ${nameDisplay}</div>
             </div>
             <button class="btn btn-danger btn-session" onclick="endSession()">
                 <i class="fa-solid fa-flag-checkered"></i> End
@@ -762,10 +764,21 @@ function renderSessionControls() {
 }
 
 window.startSession = async function() {
+    document.getElementById('start-session-name-input').value = '';
+    document.getElementById('start-session-modal').classList.add('active');
+    setTimeout(() => document.getElementById('start-session-name-input').focus(), 100);
+};
+
+window.executeStartSession = async function(saveCustomName) {
+    const input = document.getElementById('start-session-name-input');
+    const customName = saveCustomName && input.value.trim() ? input.value.trim() : null;
+    closeModal('start-session-modal');
+
     try {
         await db.collection('meta').doc('session').set({
             isActive: true,
-            startTime: firebase.firestore.FieldValue.serverTimestamp()
+            startTime: firebase.firestore.FieldValue.serverTimestamp(),
+            customName: customName
         });
         showToast('Session started! \uD83C\uDFB2');
     } catch (err) {
@@ -791,7 +804,7 @@ window.endSession = async function() {
 
     if (sessionRounds.length === 0) {
         showConfirm('No rounds played this session. End anyway?', 'End Session', async () => {
-            await db.collection('meta').doc('session').set({ isActive: false, startTime: null });
+            await db.collection('meta').doc('session').set({ isActive: false, startTime: null, customName: null });
             showToast('Session ended');
         });
         return;
@@ -841,7 +854,12 @@ window.endSession = async function() {
     });
     streaks.sort((a, b) => b.streak - a.streak);
 
+    const mos = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const defName = `Session [${sessionStart.getDate()} ${mos[sessionStart.getMonth()]} ${sessionStart.getFullYear()}]`;
+    const finalSessionName = sessionState.customName ? sessionState.customName : defName;
+
     const sessionData = {
+        sessionName: finalSessionName,
         startTime: sessionStart,
         endTime: sessionEnd,
         duration: sessionEnd.getTime() - sessionStart.getTime(),
@@ -861,7 +879,7 @@ window.endSession = async function() {
             startTime: firebase.firestore.Timestamp.fromDate(sessionStart),
             endTime: firebase.firestore.FieldValue.serverTimestamp()
         });
-        await db.collection('meta').doc('session').set({ isActive: false, startTime: null });
+        await db.collection('meta').doc('session').set({ isActive: false, startTime: null, customName: null });
         showSessionSummaryModal(sessionData);
     } catch (err) {
         console.error('End session error:', err);
@@ -884,6 +902,11 @@ window.initiateClearAllData = function() {
 };
 
 window.executeClearAllData = async function() {
+    if (!isAdminUser) {
+        showToast('Admin login required 🚫');
+        return;
+    }
+
     const input = document.getElementById('clear-data-input');
     const err = document.getElementById('clear-data-error');
     if (input.value.trim() !== 'CONFIRM') {
@@ -891,55 +914,58 @@ window.executeClearAllData = async function() {
         return;
     }
     err.style.display = 'none';
-    closeModal('clear-data-modal');
     
-    showToast('<i class="fa-solid fa-spinner fa-spin"></i> Deleting all data...', 5000);
+    const btn = document.getElementById('clear-data-confirm-btn');
+    const originalBtnHTML = btn.innerHTML;
+    btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Deleting...';
+    btn.disabled = true;
 
     try {
-        // Delete all rounds
+        console.log("Starting data wipe protocol...");
+        
+        // 1. Delete all rounds
+        console.log("Fetching rounds...");
         const allRounds = await db.collection('rounds').get();
-        let batch = db.batch();
-        let count = 0;
-
+        console.log(`Found ${allRounds.size} rounds to delete.`);
         for (const doc of allRounds.docs) {
-            batch.delete(doc.ref);
-            count++;
-            if (count === 400) {
-                await batch.commit();
-                batch = db.batch();
-                count = 0;
-            }
+            await doc.ref.delete();
         }
+        console.log("Finished deleting rounds.");
 
-        // Delete all sessions
+        // 2. Delete all sessions
+        console.log("Fetching sessions...");
         const allSessions = await db.collection('sessions').get();
+        console.log(`Found ${allSessions.size} sessions to delete.`);
         for (const doc of allSessions.docs) {
-            batch.delete(doc.ref);
-            count++;
-            if (count === 400) {
-                await batch.commit();
-                batch = db.batch();
-                count = 0;
-            }
+            await doc.ref.delete();
         }
+        console.log("Finished deleting sessions.");
 
-        if (count > 0) {
-            await batch.commit();
-        }
+        // 3. Reset session meta
+        console.log("Resetting session meta...");
+        await db.collection('meta').doc('session').set({ isActive: false, startTime: null, customName: null });
 
-        // Reset session meta
-        await db.collection('meta').doc('session').set({ isActive: false, startTime: null });
-
+        console.log("Data wipe complete. Player score fields are auto-reset due to history wipe.");
+        
+        closeModal('clear-data-modal');
         showToast('All data cleared successfully! \uD83D\uDDD1\uFE0F');
+        renderCurrentView();
+
     } catch (error) {
         console.error('Error clearing data:', error);
-        showToast('Failed to clear data \u26A0\uFE0F');
+        alert(`Deletion error: ${error.message}`);
+    } finally {
+        btn.innerHTML = originalBtnHTML;
+        btn.disabled = false;
     }
 };
 
 function showSessionSummaryModal(data) {
     const body = document.getElementById('session-summary-body');
     let html = '';
+
+    // Title
+    html += `<div style="text-align:center; font-size:1.1rem; font-weight:700; color:var(--gold-primary); margin-bottom:1rem;">${sanitizeHTML(data.sessionName)}</div>`;
 
     // Overview
     html += '<div class="session-summary-card">';
@@ -1687,6 +1713,8 @@ function renderHistory() {
     container.innerHTML = html;
 }
 
+let editingSessionId = null;
+
 function renderPastSessions() {
     const container = document.getElementById('history-sessions-content');
 
@@ -1698,23 +1726,104 @@ function renderPastSessions() {
     let html = '';
     sessions.forEach(session => {
         const duration = session.duration ? formatDuration(session.duration) : formatDuration(session.endTime - session.startTime);
-        const mvpText = session.mvp ? `\uD83C\uDFC5 ${session.mvp.name} (+${session.mvp.score})` : '';
+        const nameFallback = session.sessionName || formatDate(session.startTime);
 
-        html += `<div class="session-history-card" onclick="viewSessionSummary('${session.id}')">
-            <div class="session-history-header">
+        let headerHTML = '';
+        if (editingSessionId === session.id) {
+            headerHTML = `<div style="display:flex; gap:0.5rem; width:100%; margin-bottom:0.5rem;" onclick="event.stopPropagation()">
+                <input type="text" id="edit-session-name-${session.id}" value="${nameFallback.replace(/"/g, '&quot;')}" class="player-edit-input" style="flex:1;">
+                <button class="icon-btn" style="color:var(--success);" onclick="saveSessionName('${session.id}')"><i class="fa-solid fa-check"></i></button>
+                <button class="icon-btn" style="color:var(--danger);" onclick="cancelEditSession()"><i class="fa-solid fa-xmark"></i></button>
+            </div>`;
+        } else {
+            headerHTML = `<div class="session-history-header" style="justify-content:space-between; align-items:flex-start; margin-bottom:0.5rem;">
+                <div style="font-weight:700; color:var(--gold-primary); font-size:1.05rem;">${sanitizeHTML(nameFallback)}</div>
+                ${isAdminUser ? `<div style="display:flex; gap:0.5rem;">
+                    <button class="icon-btn admin-only text-muted" onclick="event.stopPropagation(); editSessionName('${session.id}')" title="Edit Session Name"><i class="fa-solid fa-pencil"></i></button>
+                    <button class="icon-btn admin-only" onclick="event.stopPropagation(); deleteSession('${session.id}')" style="color:var(--danger);" title="Delete Session"><i class="fa-solid fa-trash-can"></i></button>
+                </div>` : ''}
+            </div>
+            <div class="session-history-header" style="margin-bottom:0.5rem;">
                 <span class="session-history-date">${formatDate(session.startTime)}</span>
                 <span class="session-history-duration">${duration}</span>
-            </div>
-            <div class="session-history-stats">
-                <span>\uD83C\uDCCF ${session.totalRounds} rounds</span>
-                <span>\uD83D\uDC65 ${(session.leaderboard || []).length} players</span>
-            </div>
-            ${mvpText ? `<div class="session-history-mvp">${mvpText}</div>` : ''}
+            </div>`;
+        }
+
+        // Stats summary
+        let statsHTML = `<div class="session-history-stats" style="margin-top:0.5rem;">
+            <span>\uD83C\uDCCF ${session.totalRounds || 0} rounds</span>
+            <span>\uD83D\uDC65 ${(session.leaderboard || []).length} players</span>
+        </div>`;
+
+        // Biggest Win / Loss / MVP display (if explicitly asked to expand, but for now append what we have)
+        const mvpText = session.mvp ? `\uD83C\uDFC5 MVP: ${session.mvp.name} (+${session.mvp.score})` : '';
+        const bigWinText = session.biggestWin && session.biggestWin.name !== '-' ? `<span class="text-success">\uD83D\uDCC8 +${session.biggestWin.score} ${session.biggestWin.name}</span>` : '';
+        const bigLossText = session.biggestLoss && session.biggestLoss.name !== '-' ? `<span class="text-danger">\uD83D\uDCC9 ${session.biggestLoss.score} ${session.biggestLoss.name}</span>` : '';
+        
+        let extraStatsHTML = '';
+        if (mvpText || bigWinText || bigLossText) {
+            extraStatsHTML = `<div style="margin-top:0.5rem; font-size:0.8rem; line-height:1.4;">
+                ${mvpText ? `<div>${mvpText}</div>` : ''}
+                ${bigWinText ? `<div>${bigWinText}</div>` : ''}
+                ${bigLossText ? `<div>${bigLossText}</div>` : ''}
+            </div>`;
+        }
+
+        html += `<div class="session-history-card" onclick="viewSessionSummary('${session.id}')">
+            ${headerHTML}
+            ${statsHTML}
+            ${extraStatsHTML}
         </div>`;
     });
 
     container.innerHTML = html;
 }
+
+window.editSessionName = function(id) {
+    editingSessionId = id;
+    renderPastSessions();
+    const input = document.getElementById(`edit-session-name-${id}`);
+    if (input) {
+        input.focus();
+        input.selectionStart = input.value.length;
+    }
+};
+
+window.cancelEditSession = function() {
+    editingSessionId = null;
+    renderPastSessions();
+};
+
+window.saveSessionName = async function(id) {
+    const input = document.getElementById(`edit-session-name-${id}`);
+    if (!input) return;
+    const newName = input.value.trim();
+    if (!newName) {
+        showToast('Name cannot be empty');
+        return;
+    }
+    try {
+        await db.collection('sessions').doc(id).update({ sessionName: newName });
+        editingSessionId = null;
+        showToast('Session name updated');
+        // renderPastSessions() is called via onSnapshot automatically
+    } catch (err) {
+        console.error('Error updating session name:', err);
+        showToast('Failed to update name \u26A0\uFE0F');
+    }
+};
+
+window.deleteSession = function(id) {
+    showConfirm('Delete this session? This cannot be undone.', 'Delete', async () => {
+        try {
+            await db.collection('sessions').doc(id).delete();
+            showToast('Session deleted');
+        } catch (err) {
+            console.error('Error deleting session:', err);
+            showToast('Failed to delete session');
+        }
+    });
+};
 
 window.viewSessionSummary = function(sessionId) {
     const session = sessions.find(s => s.id === sessionId);
