@@ -886,7 +886,7 @@ window.initiateClearAllData = function() {
 window.executeClearAllData = async function() {
     const input = document.getElementById('clear-data-input');
     const err = document.getElementById('clear-data-error');
-    if (input.value !== 'CONFIRM') {
+    if (input.value.trim() !== 'CONFIRM') {
         err.style.display = 'block';
         return;
     }
@@ -896,22 +896,32 @@ window.executeClearAllData = async function() {
     showToast('<i class="fa-solid fa-spinner fa-spin"></i> Deleting all data...', 5000);
 
     try {
-        const batch = db.batch();
-        let count = 0;
-
         // Delete all rounds
         const allRounds = await db.collection('rounds').get();
-        allRounds.forEach(doc => {
+        let batch = db.batch();
+        let count = 0;
+
+        for (const doc of allRounds.docs) {
             batch.delete(doc.ref);
             count++;
-        });
+            if (count === 400) {
+                await batch.commit();
+                batch = db.batch();
+                count = 0;
+            }
+        }
 
         // Delete all sessions
         const allSessions = await db.collection('sessions').get();
-        allSessions.forEach(doc => {
+        for (const doc of allSessions.docs) {
             batch.delete(doc.ref);
             count++;
-        });
+            if (count === 400) {
+                await batch.commit();
+                batch = db.batch();
+                count = 0;
+            }
+        }
 
         if (count > 0) {
             await batch.commit();
@@ -921,7 +931,6 @@ window.executeClearAllData = async function() {
         await db.collection('meta').doc('session').set({ isActive: false, startTime: null });
 
         showToast('All data cleared successfully! \uD83D\uDDD1\uFE0F');
-        // The onSnapshot listeners will auto refresh Everything
     } catch (error) {
         console.error('Error clearing data:', error);
         showToast('Failed to clear data \u26A0\uFE0F');
