@@ -967,7 +967,7 @@ window.endSession = async function() {
 
 window.initiateClearAllData = function() {
     showConfirm(
-        "Are you sure you want to clear all data?<br><br>This will delete all rounds, player scores and session history.",
+        "Are you sure you want to clear all data? This will delete all rounds, player scores and session history.",
         "Clear All Data",
         () => {
             // Step 1 confirmed, open Step 2 modal
@@ -1074,6 +1074,7 @@ function showSessionSummaryModal(data) {
             { id: 'hotStreak', icon: '\uD83D\uDD25 Hot Streak' },
             { id: 'unlucky', icon: '\uD83D\uDC80 Unlucky' },
             { id: 'sharpPartner', icon: '\uD83C\uDFAF Sharp Partner' },
+            { id: 'mvp', icon: '\uD83C\uDFC6 Session MVP' },
             { id: 'riskTaker', icon: '\uD83D\uDCB0 Risk Taker' }
         ];
         bdgList.forEach(b => {
@@ -1092,23 +1093,12 @@ function showSessionSummaryModal(data) {
         html += '<div class="session-summary-title">\uD83C\uDFC6 Leaderboard</div>';
         html += '<div class="session-mini-leaderboard">';
         data.leaderboard.forEach(item => {
-            let bHtml = '';
-            if (data.badges) {
-                if (data.badges.hukumKing.includes(item.id)) bHtml += '<span title="Hukum King">\uD83D\uDC51</span> ';
-                if (data.badges.hotStreak.includes(item.id)) bHtml += '<span title="Hot Streak">\uD83D\uDD25</span> ';
-                if (data.badges.unlucky.includes(item.id)) bHtml += '<span title="Unlucky">\uD83D\uDC80</span> ';
-                if (data.badges.sharpPartner.includes(item.id)) bHtml += '<span title="Sharp Partner">\uD83C\uDFAF</span> ';
-                if (data.badges.mvp.includes(item.id)) bHtml += '<span title="Session MVP">\uD83C\uDFC6</span> ';
-                if (data.badges.riskTaker.includes(item.id)) bHtml += '<span title="Risk Taker">\uD83D\uDCB0</span> ';
-                if (bHtml) bHtml = `<span style="margin-left:0.3rem; font-size:0.9rem;">${bHtml}</span>`;
-            }
-
             const medal = item.rank <= 3 ? ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][item.rank - 1] : `#${item.rank}`;
             const clr = item.score > 0 ? 'text-success' : (item.score < 0 ? 'text-danger' : '');
             html += `<div class="session-mini-row">
                 <div style="display:flex; align-items:center; gap:0.5rem;">
                     <span class="session-mini-rank">${medal}</span>
-                    <span>${sanitizeHTML(item.name)}${bHtml}</span>
+                    <span>${sanitizeHTML(item.name)}</span>
                 </div>
                 <span class="${clr}" style="font-weight:700;">${item.score >= 0 ? '+' : ''}${item.score}</span>
             </div>`;
