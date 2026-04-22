@@ -1175,61 +1175,60 @@ input:focus, textarea:focus, select:focus { border-color: var(--gold-primary); }
 
 /* Share Card (for html2canvas) */
 #share-card {
-    width: 400px;
-    padding: 28px;
-    background: linear-gradient(160deg, #0a0a0c 0%, #151528 50%, #1a1a2e 100%);
+    width: 420px;
+    padding: 24px;
+    background: #0f0f1a;
     color: #fff;
     font-family: 'Inter', -apple-system, sans-serif;
     position: relative;
-    overflow: hidden;
+    box-sizing: border-box;
 }
 #share-card::before {
-    content: '';
-    position: absolute;
-    top: -40%;
-    right: -30%;
-    width: 250px;
-    height: 250px;
-    background: radial-gradient(circle, rgba(246,211,101,0.12) 0%, transparent 70%);
-    pointer-events: none;
+    display: none;
 }
 .share-card-header {
     text-align: center;
     margin-bottom: 20px;
-    position: relative;
 }
 .share-card-brand {
     font-family: 'Poppins', sans-serif;
-    font-size: 22px;
+    font-size: 24px;
     font-weight: 800;
+    color: #f5a623;
+}
+.share-card-subtitle {
+    color: #ffffff;
+    font-size: 16px;
+    font-weight: 700;
+    margin-top: 6px;
 }
 .share-card-date {
-    font-size: 11px;
-    color: #8a8d93;
-    margin-top: 4px;
+    font-size: 12px;
+    color: #888888;
+    margin-top: 6px;
 }
 .share-card-divider {
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(246,211,101,0.4), transparent);
-    margin: 14px 0;
+    background: rgba(255,255,255,0.1);
+    margin: 16px 0;
 }
 .share-card-section {
-    background: rgba(255,255,255,0.04);
+    background: #1a1a2e;
     border-radius: 12px;
-    padding: 12px 14px;
-    margin-bottom: 10px;
+    padding: 16px;
+    margin-bottom: 16px;
 }
 .share-card-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 4px 0;
-    font-size: 13px;
+    padding: 6px 0;
+    font-size: 14px;
 }
 .share-card-footer {
     text-align: center;
-    font-size: 10px;
-    color: #555;
+    font-size: 12px;
+    color: #888888;
     margin-top: 16px;
 }
 

@@ -2083,34 +2083,44 @@ async function shareRoundData(round) {
 
     const blob = await generateShareImage(card => {
         const resultText = round.result === 'win' ? 'Hukum Win \u2705' : 'Hukum Lose \u274C';
-        const resultClr = round.result === 'win' ? '#2ecd71' : '#e74c3c';
         const hName = round.hukumName || getPlayerName(round.hukumId);
 
         let scoresHTML = '';
         Object.entries(round.scoreChanges || {}).forEach(([pid, change]) => {
             const name = getPlayerName(pid);
-            const clr = change > 0 ? '#2ecd71' : (change < 0 ? '#e74c3c' : '#8a8d93');
+            const clr = change > 0 ? '#4caf50' : (change < 0 ? '#f44336' : '#888888');
             const display = change === 0 ? '—' : `${change >= 0 ? '+' : ''}${change}`;
-            scoresHTML += `<div style="display:flex;justify-content:space-between;padding:3px 0;font-size:13px;">
-                <span style="color:#ccc;">${name}</span>
+            
+            let roleIcon = '\uD83C\uDFAF'; 
+            if (pid === round.hukumId) roleIcon = '\uD83D\uDC51';
+            else if (round.partnerIds && round.partnerIds.includes(pid)) roleIcon = '\uD83E\uDD1D';
+
+            scoresHTML += `<div class="share-card-row">
+                <div style="color:#ffffff;">${roleIcon} ${name}</div>
                 <span style="color:${clr};font-weight:${change === 0 ? '400' : '700'};">${display}</span>
             </div>`;
         });
 
         card.innerHTML = `
             <div class="share-card-header">
-                <div class="share-card-brand" style="color:#f6d365;">\uD83C\uDCB4 3 Patti PRO</div>
+                <div class="share-card-brand">\uD83C\uDCB4 3 Patti PRO</div>
+                <div class="share-card-subtitle">Round Result</div>
                 <div class="share-card-date">\uD83D\uDCC5 ${formatDateTime(round.timestamp)}</div>
             </div>
             <div class="share-card-divider"></div>
             <div class="share-card-section">
-                <div style="font-size:16px;font-weight:700;margin-bottom:4px;">
-                    \uD83D\uDC51 Hukum: ${hName} \u2014 <span style="color:${resultClr}">${resultText}</span>
+                <div style="font-size:14px;color:#888888;margin-bottom:8px;font-weight:700;">ROUND DETAILS</div>
+                <div class="share-card-row">
+                    <span style="color:#ffffff;">\uD83D\uDC51 Hukum: ${hName}</span>
+                    <span style="font-weight:700; color:${round.result === 'win' ? '#4caf50' : '#f44336'}">${resultText}</span>
                 </div>
-                <div style="font-size:13px;color:#8a8d93;">\uD83D\uDCB0 Bid: ${round.bid} points</div>
+                <div class="share-card-row">
+                    <span style="color:#ffffff;">\uD83D\uDCB0 Bid</span>
+                    <span style="color:#ffffff;">${round.bid} points</span>
+                </div>
             </div>
             <div class="share-card-section">
-                <div style="font-size:12px;color:#8a8d93;margin-bottom:6px;">\uD83D\uDCCA Score Changes</div>
+                <div style="font-size:14px;color:#888888;margin-bottom:8px;font-weight:700;">SCORE CHANGES</div>
                 ${scoresHTML}
             </div>
             <div class="share-card-footer">3 Patti PRO \u2022 Score Tracker</div>
@@ -2138,69 +2148,117 @@ window.shareLeaderboard = async function() {
         ranked.forEach((item, idx) => {
             const rank = idx + 1;
             const medal = rank <= 3 ? ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][rank - 1] : `#${rank}`;
-            const clr = item.stats.totalScore > 0 ? '#2ecd71' : (item.stats.totalScore < 0 ? '#e74c3c' : '#8a8d93');
-            rowsHTML += `<div style="display:flex;justify-content:space-between;padding:5px 0;font-size:14px;">
-                <span style="color:#fff;">${medal} ${item.player.name}</span>
-                <span style="color:${clr};font-weight:700;">${item.stats.totalScore >= 0 ? '+' : ''}${item.stats.totalScore}</span>
+            const clr = item.stats.totalScore > 0 ? '#4caf50' : (item.stats.totalScore < 0 ? '#f44336' : '#888888');
+            const pStats = item.stats;
+
+            rowsHTML += `
+            <div style="border-bottom: 1px solid rgba(255,255,255,0.05); padding: 8px 0;">
+                <div class="share-card-row" style="padding: 0 0 2px 0;">
+                    <div style="color:#ffffff; font-size:15px; font-weight:700;">${medal} ${item.player.name}</div>
+                    <span style="color:${clr};font-weight:700;font-size:15px;">${pStats.totalScore >= 0 ? '+' : ''}${pStats.totalScore}</span>
+                </div>
+                <div style="font-size:12px; color:#888888; display:flex; gap:12px;">
+                    <span>${pStats.roundsPlayed}R</span>
+                    <span>${pStats.wins}W/${pStats.losses}L</span>
+                    <span>\uD83D\uDC51${pStats.asHukum}</span>
+                    <span>\uD83E\uDD1D${pStats.asPartner}</span>
+                </div>
             </div>`;
         });
 
         card.innerHTML = `
             <div class="share-card-header">
-                <div class="share-card-brand" style="color:#f6d365;">\uD83C\uDCB4 3 Patti PRO Leaderboard</div>
+                <div class="share-card-brand">\uD83C\uDCB4 3 Patti PRO</div>
+                <div class="share-card-subtitle">Rankings</div>
                 <div class="share-card-date">\uD83D\uDCC5 ${filterLabel} \u2022 ${formatDate(new Date())}</div>
             </div>
             <div class="share-card-divider"></div>
-            <div class="share-card-section">
+            <div class="share-card-section" style="padding-top:4px;">
                 ${rowsHTML}
             </div>
             <div class="share-card-footer">3 Patti PRO \u2022 Score Tracker</div>
         `;
     });
 
-    await shareImageBlob(blob, '3 Patti PRO - Leaderboard');
+    await shareImageBlob(blob, '3 Patti PRO - Rankings');
 };
 
 window.shareSessionSummary = async function() {
-    if (typeof html2canvas === 'undefined') {
-        showToast('Share feature unavailable');
-        return;
-    }
-
-    const modalBox = document.querySelector('#session-modal .session-modal-box');
-    if (!modalBox) return;
+    const lastSession = sessions.length > 0 ? sessions[0] : null;
+    if (!lastSession) return;
 
     showToast('Generating image...');
 
-    // Temporarily hide interactive buttons
-    const closeBtn = modalBox.querySelector('.close-modal');
-    const shareBtn = modalBox.querySelector('button[onclick="shareSessionSummary()"]');
-    
-    if (closeBtn) closeBtn.style.display = 'none';
-    if (shareBtn) shareBtn.style.display = 'none';
-
-    // Wait for DOM to settle
-    await new Promise(r => setTimeout(r, 150));
-
-    try {
-        const canvas = await html2canvas(modalBox, {
-            backgroundColor: '#111216', // Match --bg-card approx
-            scale: 2,
-            useCORS: true,
-            logging: false
+    const blob = await generateShareImage(card => {
+        let lbHTML = '';
+        (lastSession.leaderboard || []).forEach(item => {
+            const medal = item.rank <= 3 ? ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][item.rank - 1] : `#${item.rank}`;
+            const clr = item.score > 0 ? '#4caf50' : (item.score < 0 ? '#f44336' : '#888888');
+            lbHTML += `<div class="share-card-row">
+                <div style="display:flex; align-items:center; space-between; gap:6px;">
+                    <span>${medal}</span>
+                    <span>${sanitizeHTML(item.name)}</span>
+                </div>
+                <span style="color:${clr};font-weight:700;">${item.score >= 0 ? '+' : ''}${item.score}</span>
+            </div>`;
         });
 
-        if (closeBtn) closeBtn.style.display = '';
-        if (shareBtn) shareBtn.style.display = '';
+        const dur = lastSession.duration ? formatDuration(lastSession.duration) :
+            formatDuration(lastSession.endTime - lastSession.startTime);
 
-        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
-        await shareImageBlob(blob, '3 Patti PRO - Session Summary');
-    } catch (err) {
-        if (closeBtn) closeBtn.style.display = '';
-        if (shareBtn) shareBtn.style.display = '';
-        console.error('html2canvas error:', err);
-        showToast('Failed to generate image');
-    }
+        let awardsHTML = '';
+        if (lastSession.mvp) {
+            awardsHTML += `<div class="share-card-row"><span>\uD83C\uDFC5 MVP</span><strong style="color:#4caf50;">${lastSession.mvp.name} (+${lastSession.mvp.score})</strong></div>`;
+        }
+        if (lastSession.bestHukum) {
+            awardsHTML += `<div class="share-card-row"><span>\uD83D\uDC51 Best Hukum</span><strong>${lastSession.bestHukum.name} (${lastSession.bestHukum.winRate}%)</strong></div>`;
+        }
+        if (lastSession.biggestWin) {
+            awardsHTML += `<div class="share-card-row"><span>\uD83D\uDCC8 Big Win</span><strong style="color:#4caf50;">${lastSession.biggestWin.name} (+${lastSession.biggestWin.score})</strong></div>`;
+        }
+        if (lastSession.biggestLoss) {
+            awardsHTML += `<div class="share-card-row"><span>\uD83D\uDCC9 Big Loss</span><strong style="color:#f44336;">${lastSession.biggestLoss.name} (${lastSession.biggestLoss.score})</strong></div>`;
+        }
+
+        if (lastSession.badges) {
+            const bdgList = [
+                { id: 'hukumKing', icon: '\uD83D\uDC51 Hukum King' },
+                { id: 'hotStreak', icon: '\uD83D\uDD25 Hot Streak' },
+                { id: 'unlucky', icon: '\uD83D\uDC80 Unlucky' },
+                { id: 'sharpPartner', icon: '\uD83C\uDFAF Sharp Partner' },
+                { id: 'mvp', icon: '\uD83C\uDFC6 Session MVP' },
+                { id: 'riskTaker', icon: '\uD83D\uDCB0 Risk Taker' }
+            ];
+            bdgList.forEach(b => {
+                const arr = lastSession.badges[b.id];
+                if (arr && arr.length > 0) {
+                    const names = arr.map(id => sanitizeHTML(getPlayerName(id))).join(', ');
+                    awardsHTML += `<div class="share-card-row"><span>${b.icon}</span><strong style="text-align:right;">${names}</strong></div>`;
+                }
+            });
+        }
+
+        card.innerHTML = `
+            <div class="share-card-header">
+                <div class="share-card-brand">\uD83C\uDCB4 3 Patti PRO</div>
+                <div class="share-card-subtitle">Session Summary</div>
+                <div class="share-card-date">\uD83D\uDCC5 ${formatDate(lastSession.startTime)} \u2022 \u23F1 ${dur} \u2022 \uD83C\uDCCF ${lastSession.totalRounds} rounds</div>
+            </div>
+            <div class="share-card-divider"></div>
+            ${awardsHTML ? `
+            <div class="share-card-section">
+                <div style="font-size:14px;color:#888888;margin-bottom:8px;font-weight:700;">\uD83C\uDFC6 Awards</div>
+                ${awardsHTML}
+            </div>` : ''}
+            <div class="share-card-section">
+                <div style="font-size:14px;color:#888888;margin-bottom:8px;font-weight:700;">\uD83C\uDFC6 Leaderboard</div>
+                ${lbHTML}
+            </div>
+            <div class="share-card-footer">3 Patti PRO \u2022 Score Tracker</div>
+        `;
+    });
+
+    await shareImageBlob(blob, '3 Patti PRO - Session Summary');
 };
 
 // =============================================
