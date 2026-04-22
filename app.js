@@ -2162,49 +2162,45 @@ window.shareLeaderboard = async function() {
 };
 
 window.shareSessionSummary = async function() {
-    // Get the last session or the one displayed in the modal
-    const lastSession = sessions.length > 0 ? sessions[0] : null;
-    if (!lastSession) return;
+    if (typeof html2canvas === 'undefined') {
+        showToast('Share feature unavailable');
+        return;
+    }
+
+    const modalBox = document.querySelector('#session-modal .session-modal-box');
+    if (!modalBox) return;
 
     showToast('Generating image...');
 
-    const blob = await generateShareImage(card => {
-        let lbHTML = '';
-        (lastSession.leaderboard || []).forEach(item => {
-            const medal = item.rank <= 3 ? ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][item.rank - 1] : `#${item.rank}`;
-            const clr = item.score > 0 ? '#2ecd71' : (item.score < 0 ? '#e74c3c' : '#8a8d93');
-            lbHTML += `<div style="display:flex;justify-content:space-between;padding:4px 0;font-size:13px;">
-                <span style="color:#fff;">${medal} ${item.name}</span>
-                <span style="color:${clr};font-weight:700;">${item.score >= 0 ? '+' : ''}${item.score}</span>
-            </div>`;
+    // Temporarily hide interactive buttons
+    const closeBtn = modalBox.querySelector('.close-modal');
+    const shareBtn = modalBox.querySelector('button[onclick="shareSessionSummary()"]');
+    
+    if (closeBtn) closeBtn.style.display = 'none';
+    if (shareBtn) shareBtn.style.display = 'none';
+
+    // Wait for DOM to settle
+    await new Promise(r => setTimeout(r, 150));
+
+    try {
+        const canvas = await html2canvas(modalBox, {
+            backgroundColor: '#111216', // Match --bg-card approx
+            scale: 2,
+            useCORS: true,
+            logging: false
         });
 
-        const dur = lastSession.duration ? formatDuration(lastSession.duration) :
-            formatDuration(lastSession.endTime - lastSession.startTime);
+        if (closeBtn) closeBtn.style.display = '';
+        if (shareBtn) shareBtn.style.display = '';
 
-        card.innerHTML = `
-            <div class="share-card-header">
-                <div class="share-card-brand" style="color:#f6d365;">\uD83C\uDCB4 3 Patti PRO</div>
-                <div style="font-size:14px;font-weight:700;margin-top:4px;">Session Summary</div>
-                <div class="share-card-date">\uD83D\uDCC5 ${formatDate(lastSession.startTime)} \u2022 \u23F1 ${dur} \u2022 \uD83C\uDCCF ${lastSession.totalRounds} rounds</div>
-            </div>
-            <div class="share-card-divider"></div>
-            ${lastSession.mvp ? `<div class="share-card-section">
-                <div style="font-size:12px;color:#8a8d93;margin-bottom:4px;">\uD83C\uDFC6 Awards</div>
-                <div style="font-size:13px;">\uD83C\uDFC5 MVP: <strong style="color:#2ecd71;">${lastSession.mvp.name} (+${lastSession.mvp.score})</strong></div>
-                ${lastSession.bestHukum ? `<div style="font-size:13px;">\uD83D\uDC51 Best Hukum: <strong>${lastSession.bestHukum.name}</strong> (${lastSession.bestHukum.winRate}%)</div>` : ''}
-                <div style="font-size:13px;">\uD83D\uDCC8 Big Win: <strong style="color:#2ecd71;">${lastSession.biggestWin.name} (+${lastSession.biggestWin.score})</strong></div>
-                <div style="font-size:13px;">\uD83D\uDCC9 Big Loss: <strong style="color:#e74c3c;">${lastSession.biggestLoss.name} (${lastSession.biggestLoss.score})</strong></div>
-            </div>` : ''}
-            <div class="share-card-section">
-                <div style="font-size:12px;color:#8a8d93;margin-bottom:6px;">\uD83C\uDFC6 Leaderboard</div>
-                ${lbHTML}
-            </div>
-            <div class="share-card-footer">3 Patti PRO \u2022 Score Tracker</div>
-        `;
-    });
-
-    await shareImageBlob(blob, '3 Patti PRO - Session Summary');
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+        await shareImageBlob(blob, '3 Patti PRO - Session Summary');
+    } catch (err) {
+        if (closeBtn) closeBtn.style.display = '';
+        if (shareBtn) shareBtn.style.display = '';
+        console.error('html2canvas error:', err);
+        showToast('Failed to generate image');
+    }
 };
 
 // =============================================
