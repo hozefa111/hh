@@ -1064,9 +1064,6 @@ function showSessionSummaryModal(data) {
     }
     html += `<div class="session-summary-stat"><span class="label">\uD83D\uDCC8 Biggest Win</span><span class="value text-success">${data.biggestWin.name} (+${data.biggestWin.score})</span></div>`;
     html += `<div class="session-summary-stat"><span class="label">\uD83D\uDCC9 Biggest Loss</span><span class="value text-danger">${data.biggestLoss.name} (${data.biggestLoss.score})</span></div>`;
-    if (data.streaks.length > 0) {
-        html += `<div class="session-summary-stat"><span class="label">\uD83D\uDD25 Streaks</span><span class="value">${data.streaks.map(s => `${s.name} (${s.streak})`).join(', ')}</span></div>`;
-    }
 
     if (data.badges) {
         const bdgList = [
