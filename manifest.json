@@ -1,20 +1,19 @@
 {
-  "name": "3 Patti Score Tracker",
-  "short_name": "3 Patti",
-  "description": "Track scores for Teen Patti seamlessly",
-  "start_url": "./index.html",
+  "name": "3 Patti PRO",
+  "short_name": "3PattiPRO",
+  "start_url": "/",
   "display": "standalone",
-  "background_color": "#0a0a0c",
-  "theme_color": "#0a0a0c",
-  "orientation": "portrait",
+  "background_color": "#0f0f1a",
+  "theme_color": "#f5a623",
+  "description": "3 Patti Score Tracker",
   "icons": [
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/8361/8361134.png",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/8361/8361134.png",
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png"
     }
