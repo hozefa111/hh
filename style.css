@@ -717,6 +717,12 @@ input:focus, textarea:focus, select:focus { border-color: var(--gold-primary); }
     border: 1px solid rgba(255,255,255,0.05);
     border-radius: var(--radius-md);
     padding: 0.8rem;
+    cursor: pointer;
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+.role-stat-card:active, .role-stat-card:hover {
+    transform: translateY(-2px) scale(1.02);
+    background: rgba(255,255,255,0.08);
 }
 .role-stat-title {
     font-size: 0.75rem;
@@ -1293,6 +1299,15 @@ input:focus, textarea:focus, select:focus { border-color: var(--gold-primary); }
     transform: translateY(20px); transition: transform 0.3s;
 }
 .modal-overlay.active .modal-box { transform: translateY(0); }
+
+.bottom-sheet {
+    margin-top: auto !important;
+    border-radius: 20px 20px 0 0 !important;
+    max-width: 500px !important;
+    transform: translateY(100%) !important;
+    padding-bottom: env(safe-area-inset-bottom, 20px) !important;
+}
+.modal-overlay.active .bottom-sheet { transform: translateY(0) !important; }
 .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem; }
 
 /* Toast */

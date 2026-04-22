@@ -572,13 +572,13 @@ function getBestWorstRound(playerId, filteredRounds) {
         if (!round.scoreChanges || round.scoreChanges[playerId] === undefined) return;
         const change = round.scoreChanges[playerId];
         if (change > bestScore) { bestScore = change; best = round; }
-        if (change < worstScore) { worstScore = change; worst = round; }
+        if (change < worstScore && change < 0) { worstScore = change; worst = round; }
     });
 
     return {
         best, worst,
         bestScore: bestScore === -Infinity ? 0 : bestScore,
-        worstScore: worstScore === Infinity ? 0 : worstScore
+        worstScore: worstScore === Infinity ? null : worstScore
     };
 }
 
@@ -873,6 +873,64 @@ window.endSession = async function() {
     });
     streaks.sort((a, b) => b.streak - a.streak);
 
+    // Badges Compute
+    const tempBadges = {
+        hukumKing: [], hotStreak: [], unlucky: [], sharpPartner: [], mvp: [], riskTaker: []
+    };
+
+    if (leaderboard.length > 0) {
+        const mvpScore = leaderboard[0].score;
+        tempBadges.mvp = leaderboard.filter(p => p.score === mvpScore).map(p => p.id);
+    }
+
+    let maxHukum = -1;
+    let maxLosses = -1;
+    players.forEach(p => {
+        const s = stats[p.id];
+        if (!s) return;
+        if (s.asHukum > maxHukum) maxHukum = s.asHukum;
+        if (s.losses > maxLosses) maxLosses = s.losses;
+    });
+    if (maxHukum > 0) tempBadges.hukumKing = players.filter(p => stats[p.id] && stats[p.id].asHukum === maxHukum).map(p => p.id);
+    if (maxLosses > 0) tempBadges.unlucky = players.filter(p => stats[p.id] && stats[p.id].losses === maxLosses).map(p => p.id);
+
+    players.forEach(p => {
+        const s = stats[p.id];
+        if (s && s.asPartner >= 3 && (s.partnerWins / s.asPartner) >= 0.8) {
+            tempBadges.sharpPartner.push(p.id);
+        }
+    });
+
+    let maxBid = -1;
+    sessionRounds.forEach(r => {
+        if (r.type !== 'settlement' && r.bid > maxBid) maxBid = r.bid;
+    });
+    if (maxBid > 0) {
+        sessionRounds.forEach(r => {
+            if (r.type !== 'settlement' && r.bid === maxBid && !tempBadges.riskTaker.includes(r.hukumId)) {
+                tempBadges.riskTaker.push(r.hukumId);
+            }
+        });
+    }
+
+    players.forEach(p => {
+        let maxWins = 0;
+        let currentWins = 0;
+        sessionRounds.slice().reverse().forEach(r => {
+            if (r.type === 'settlement' || !r.scoreChanges || r.scoreChanges[p.id] === undefined) return;
+            const change = r.scoreChanges[p.id];
+            if (change > 0) {
+                currentWins++;
+                if (currentWins > maxWins) maxWins = currentWins;
+            } else if (change < 0) {
+                currentWins = 0;
+            }
+        });
+        if (maxWins >= 3) {
+            tempBadges.hotStreak.push(p.id);
+        }
+    });
+
     const mos = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const defName = `Session [${sessionStart.getDate()} ${mos[sessionStart.getMonth()]} ${sessionStart.getFullYear()}]`;
     const finalSessionName = sessionState.customName ? sessionState.customName : defName;
@@ -888,7 +946,8 @@ window.endSession = async function() {
         bestHukum,
         biggestWin,
         biggestLoss,
-        streaks
+        streaks,
+        badges: tempBadges
     };
 
     // Save to Firestore
@@ -1008,6 +1067,23 @@ function showSessionSummaryModal(data) {
     if (data.streaks.length > 0) {
         html += `<div class="session-summary-stat"><span class="label">\uD83D\uDD25 Streaks</span><span class="value">${data.streaks.map(s => `${s.name} (${s.streak})`).join(', ')}</span></div>`;
     }
+
+    if (data.badges) {
+        const bdgList = [
+            { id: 'hukumKing', icon: '\uD83D\uDC51 Hukum King' },
+            { id: 'hotStreak', icon: '\uD83D\uDD25 Hot Streak' },
+            { id: 'unlucky', icon: '\uD83D\uDC80 Unlucky' },
+            { id: 'sharpPartner', icon: '\uD83C\uDFAF Sharp Partner' },
+            { id: 'riskTaker', icon: '\uD83D\uDCB0 Risk Taker' }
+        ];
+        bdgList.forEach(b => {
+            const arr = data.badges[b.id];
+            if (arr && arr.length > 0) {
+                const names = arr.map(id => sanitizeHTML(getPlayerName(id))).join(', ');
+                html += `<div class="session-summary-stat"><span class="label">${b.icon}</span><span class="value">${names}</span></div>`;
+            }
+        });
+    }
     html += '</div>';
 
     // Leaderboard
@@ -1016,12 +1092,23 @@ function showSessionSummaryModal(data) {
         html += '<div class="session-summary-title">\uD83C\uDFC6 Leaderboard</div>';
         html += '<div class="session-mini-leaderboard">';
         data.leaderboard.forEach(item => {
+            let bHtml = '';
+            if (data.badges) {
+                if (data.badges.hukumKing.includes(item.id)) bHtml += '<span title="Hukum King">\uD83D\uDC51</span> ';
+                if (data.badges.hotStreak.includes(item.id)) bHtml += '<span title="Hot Streak">\uD83D\uDD25</span> ';
+                if (data.badges.unlucky.includes(item.id)) bHtml += '<span title="Unlucky">\uD83D\uDC80</span> ';
+                if (data.badges.sharpPartner.includes(item.id)) bHtml += '<span title="Sharp Partner">\uD83C\uDFAF</span> ';
+                if (data.badges.mvp.includes(item.id)) bHtml += '<span title="Session MVP">\uD83C\uDFC6</span> ';
+                if (data.badges.riskTaker.includes(item.id)) bHtml += '<span title="Risk Taker">\uD83D\uDCB0</span> ';
+                if (bHtml) bHtml = `<span style="margin-left:0.3rem; font-size:0.9rem;">${bHtml}</span>`;
+            }
+
             const medal = item.rank <= 3 ? ['\uD83E\uDD47', '\uD83E\uDD48', '\uD83E\uDD49'][item.rank - 1] : `#${item.rank}`;
             const clr = item.score > 0 ? 'text-success' : (item.score < 0 ? 'text-danger' : '');
             html += `<div class="session-mini-row">
                 <div style="display:flex; align-items:center; gap:0.5rem;">
                     <span class="session-mini-rank">${medal}</span>
-                    <span>${sanitizeHTML(item.name)}</span>
+                    <span>${sanitizeHTML(item.name)}${bHtml}</span>
                 </div>
                 <span class="${clr}" style="font-weight:700;">${item.score >= 0 ? '+' : ''}${item.score}</span>
             </div>`;
@@ -1563,17 +1650,17 @@ function renderPlayerProfile() {
 
     // Role stats
     html += `<div class="role-stats-grid">
-        <div class="role-stat-card">
+        <div class="role-stat-card" onclick="openRolePopup('${player.id}', 'hukum')">
             <div class="role-stat-title">\uD83D\uDC51 Hukum</div>
             <div class="role-stat-count">${stats.asHukum || 0}</div>
             <div class="role-stat-wl">${stats.hukumWins || 0}W / ${stats.hukumLosses || 0}L</div>
         </div>
-        <div class="role-stat-card">
+        <div class="role-stat-card" onclick="openRolePopup('${player.id}', 'partner')">
             <div class="role-stat-title">\uD83E\uDD1D Partner</div>
             <div class="role-stat-count">${stats.asPartner || 0}</div>
             <div class="role-stat-wl">${stats.partnerWins || 0}W / ${stats.partnerLosses || 0}L</div>
         </div>
-        <div class="role-stat-card">
+        <div class="role-stat-card" onclick="openRolePopup('${player.id}', 'non-partner')">
             <div class="role-stat-title">\uD83C\uDFAF Non-Partner</div>
             <div class="role-stat-count">${stats.asNonPartner || 0}</div>
             <div class="role-stat-wl">${stats.nonPartnerWins || 0}W / ${stats.nonPartnerLosses || 0}L</div>
@@ -1590,8 +1677,8 @@ function renderPlayerProfile() {
         </div>
         <div class="bw-card">
             <div class="bw-label">\uD83D\uDCC9 Worst Round</div>
-            <div class="bw-value text-danger">${bw.worstScore >= 0 ? '+' : ''}${bw.worstScore}</div>
-            ${bw.worst ? `<div class="bw-detail">Bid ${bw.worst.bid} \u2022 ${formatDateTime(bw.worst.timestamp)}</div>` : ''}
+            <div class="bw-value ${bw.worst ? 'text-danger' : 'text-muted'}">${bw.worst ? bw.worstScore : '\u2014'}</div>
+            ${bw.worst ? `<div class="bw-detail">Bid ${bw.worst.bid} \u2022 ${formatDateTime(bw.worst.timestamp)}</div>` : '<div class="bw-detail">No losses yet</div>'}
         </div>
     </div>`;
 
@@ -1665,6 +1752,80 @@ function renderPlayerProfile() {
     container.innerHTML = html;
     renderFilterBar('profile-filter-bar');
 }
+
+window.openRolePopup = function(playerId, role) {
+    const player = players.find(p => p.id === playerId);
+    if (!player) return;
+
+    const filteredRounds = getFilteredGameRounds();
+    let matchingRounds = [];
+    let titleHtml = '';
+
+    if (role === 'hukum') {
+        titleHtml = `<i class="fa-solid fa-crown gold-text"></i> ${sanitizeHTML(player.name)} as Hukum`;
+        matchingRounds = filteredRounds.filter(r => r.hukumId === playerId);
+    } else if (role === 'partner') {
+        titleHtml = `<i class="fa-solid fa-handshake" style="color:var(--info);"></i> ${sanitizeHTML(player.name)} as Partner`;
+        matchingRounds = filteredRounds.filter(r => r.partnerIds && r.partnerIds.includes(playerId));
+    } else {
+        titleHtml = `<i class="fa-solid fa-bullseye text-danger"></i> ${sanitizeHTML(player.name)} as Non-Partner`;
+        matchingRounds = filteredRounds.filter(r => r.nonPartnerIds && r.nonPartnerIds.includes(playerId));
+    }
+
+    document.getElementById('role-popup-title').innerHTML = titleHtml;
+
+    const body = document.getElementById('role-popup-body');
+    if (matchingRounds.length === 0) {
+        body.innerHTML = '<p class="empty-state">No rounds found</p>';
+    } else {
+        let listHtml = '';
+        matchingRounds.forEach(round => {
+            const isWin = round.result === 'win';
+            // Compute player specific result
+            let playerWon = false;
+            if (role === 'hukum' || role === 'partner') {
+                playerWon = isWin;
+            } else {
+                playerWon = !isWin;
+            }
+
+            const resClass = playerWon ? 'text-success' : 'text-danger';
+            const resLabel = playerWon ? 'Won' : 'Lost';
+            const scoreChange = round.scoreChanges ? (round.scoreChanges[playerId] || 0) : 0;
+            const scoreStr = scoreChange === 0 ? '0' : (scoreChange > 0 ? `+${scoreChange}` : scoreChange);
+
+            let subtext = '';
+            if (role === 'hukum') {
+                const parts = round.partnerNames ? round.partnerNames.join(', ') : 'None';
+                const nons = round.nonPartnerNames ? round.nonPartnerNames.join(', ') : 'None';
+                subtext = `Partners: ${parts}<br>Non-Partners: ${nons}`;
+            } else if (role === 'partner') {
+                const otherParts = (round.partnerNames || []).filter(n => n !== player.name).join(', ');
+                subtext = `Hukum: ${round.hukumName || 'Unknown'}${otherParts ? '<br>Other Partners: ' + otherParts : ''}`;
+            } else {
+                const parts = round.partnerNames ? round.partnerNames.join(', ') : 'None';
+                subtext = `Hukum: ${round.hukumName || 'Unknown'}<br>Partners: ${parts}`;
+            }
+
+            listHtml += `<div style="background:var(--bg-nav); border:1px solid rgba(255,255,255,0.05); padding:0.8rem; border-radius:var(--radius-sm); margin-bottom:0.5rem;">
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem; align-items:center;">
+                    <span style="font-size:0.8rem; color:var(--text-muted);">${formatDateTime(round.timestamp)}</span>
+                    <span style="font-size:0.85rem; font-weight:bold;">Bid: ${round.bid}</span>
+                </div>
+                <div style="display:flex; justify-content:space-between; margin-bottom:0.4rem; align-items:center;">
+                    <span class="${resClass}" style="font-weight:bold;">${resLabel}</span>
+                    <span class="${scoreChange > 0 ? 'text-success' : (scoreChange < 0 ? 'text-danger' : 'text-muted')}" style="font-weight:900; font-size:1.1rem;">${scoreStr}</span>
+                </div>
+                <div style="font-size:0.75rem; color:rgba(255,255,255,0.6); line-height:1.4;">
+                    ${subtext}
+                </div>
+            </div>`;
+        });
+        body.innerHTML = listHtml;
+    }
+
+    document.getElementById('role-popup-modal').classList.add('active');
+};
 
 // =============================================
 // RENDER: ROUND HISTORY
