@@ -53,3 +53,26 @@ db.enablePersistence({ synchronizeTabs: true }).catch(err => {
 });
 
 console.log('🔥 Firebase initialized for 3 Patti PRO (patti-pro-a61d8)');
+
+// --- ADDED FOR NOTIFICATIONS ---
+// Dynamically load Firebase Messaging Compat SDK since index.html is locked
+const msgScript = document.createElement('script');
+msgScript.src = "https://www.gstatic.com/firebasejs/10.12.0/firebase-messaging-compat.js";
+document.body.appendChild(msgScript);
+
+window.VAPID_KEY = "BMok8jsI_GYiyLkU4CJzMPTSo7IARqREdA5rOZbp3rIUTneXvZxFOJ4uYZ7nheTIBYDSksEZXHIU2GA4kykyUOA";
+
+/*
+  FIRESTORE SECURITY RULES - ADDED:
+  match /fcmTokens/{tokenId} {
+    allow read: if isAdmin();
+    allow write: if true;
+  }
+  match /pendingNotifications/{docId} {
+    allow read, write: if isAdmin();
+  }
+*/
+
+const notifScript = document.createElement('script');
+notifScript.src = 'notifications.js';
+document.body.appendChild(notifScript);
