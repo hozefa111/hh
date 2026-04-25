@@ -1839,8 +1839,24 @@ window.openRoundDetailsPopup = function(roundId, playerId, type) {
     const scoreStr = scoreChange === 0 ? '0' : (scoreChange > 0 ? `+${scoreChange}` : scoreChange);
 
     const hukumName = round.hukumName || getPlayerName(round.hukumId) || 'Unknown';
-    const partnerNames = round.partnerNames ? round.partnerNames.join(', ') : 'None';
-    const nonPartnerNames = round.nonPartnerNames ? round.nonPartnerNames.join(', ') : 'None';
+    
+    // Filter out current player from partners
+    let otherPartnersList = [];
+    if (round.partnerNames) {
+        otherPartnersList = round.partnerNames.filter(n => n !== player.name);
+    }
+    const hasOtherPartners = otherPartnersList.length > 0;
+    const partnerNamesStr = otherPartnersList.join(', ');
+    const partnerLabel = isPartner ? "Other Partners" : "Partners";
+
+    // Filter out current player from non-partners
+    let otherNonPartnersList = [];
+    if (round.nonPartnerNames) {
+        otherNonPartnersList = round.nonPartnerNames.filter(n => n !== player.name);
+    }
+    const hasOtherNonPartners = otherNonPartnersList.length > 0;
+    const nonPartnerNamesStr = otherNonPartnersList.join(', ');
+    const nonPartnerLabel = (!isHukum && !isPartner) ? "Other Non-Partners" : "Non-Partners";
 
     let html = `
         <div style="background:var(--bg-nav); border:1px solid rgba(255,255,255,0.05); padding:1.2rem; border-radius:var(--radius-md);">
@@ -1871,15 +1887,17 @@ window.openRoundDetailsPopup = function(roundId, playerId, type) {
                 <span style="font-size:0.95rem;">${hukumName}</span>
             </div>` : ''}
 
+            ${hasOtherPartners ? `
             <div style="margin-bottom:0.8rem;">
-                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">Partners</span>
-                <span style="font-size:0.95rem;">${partnerNames}</span>
-            </div>
+                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">${partnerLabel}</span>
+                <span style="font-size:0.95rem;">${partnerNamesStr}</span>
+            </div>` : ''}
 
+            ${hasOtherNonPartners ? `
             <div>
-                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">Non-Partners</span>
-                <span style="font-size:0.95rem;">${nonPartnerNames}</span>
-            </div>
+                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">${nonPartnerLabel}</span>
+                <span style="font-size:0.95rem;">${nonPartnerNamesStr}</span>
+            </div>` : ''}
         </div>
     `;
 
