@@ -1657,12 +1657,12 @@ function renderPlayerProfile() {
     // Best / Worst Round
     const bw = getBestWorstRound(player.id, filteredRounds);
     html += `<div class="best-worst-grid">
-        <div class="bw-card">
+        <div class="bw-card ${bw.best ? 'clickable' : ''}" ${bw.best ? `onclick="openRoundDetailsPopup('${bw.best.id}', '${player.id}', 'best')"` : ''}>
             <div class="bw-label">\uD83D\uDCC8 Best Round</div>
             <div class="bw-value text-success">${bw.bestScore >= 0 ? '+' : ''}${bw.bestScore}</div>
             ${bw.best ? `<div class="bw-detail">Bid ${bw.best.bid} \u2022 ${formatDateTime(bw.best.timestamp)}</div>` : ''}
         </div>
-        <div class="bw-card">
+        <div class="bw-card ${bw.worst ? 'clickable' : ''}" ${bw.worst ? `onclick="openRoundDetailsPopup('${bw.worst.id}', '${player.id}', 'worst')"` : ''}>
             <div class="bw-label">\uD83D\uDCC9 Worst Round</div>
             <div class="bw-value ${bw.worst ? 'text-danger' : 'text-muted'}">${bw.worst ? bw.worstScore : '\u2014'}</div>
             ${bw.worst ? `<div class="bw-detail">Bid ${bw.worst.bid} \u2022 ${formatDateTime(bw.worst.timestamp)}</div>` : '<div class="bw-detail">No losses yet</div>'}
@@ -1812,6 +1812,79 @@ window.openRolePopup = function(playerId, role) {
     }
 
     document.getElementById('role-popup-modal').classList.add('active');
+};
+
+window.openRoundDetailsPopup = function(roundId, playerId, type) {
+    const player = players.find(p => p.id === playerId);
+    if (!player) return;
+
+    const filteredRounds = getFilteredGameRounds();
+    const round = filteredRounds.find(r => r.id === roundId);
+    if (!round) return;
+
+    let titleHtml = type === 'best' ? 'Best Round 📈' : 'Worst Round 📉';
+    document.getElementById('round-details-popup-title').innerHTML = titleHtml;
+
+    const isHukum = round.hukumId === playerId;
+    const isPartner = (round.partnerIds || []).includes(playerId);
+    const roleLabel = isHukum ? '\uD83D\uDC51 Hukum' : (isPartner ? '\uD83E\uDD1D Partner' : '\uD83C\uDFAF Non-Partner');
+    
+    const isWin = round.result === 'win';
+    const playerWon = (isHukum || isPartner) ? isWin : !isWin;
+
+    const resClass = playerWon ? 'text-success' : 'text-danger';
+    const resLabel = playerWon ? 'Win' : 'Loss';
+    
+    const scoreChange = round.scoreChanges ? (round.scoreChanges[playerId] || 0) : 0;
+    const scoreStr = scoreChange === 0 ? '0' : (scoreChange > 0 ? `+${scoreChange}` : scoreChange);
+
+    const hukumName = round.hukumName || getPlayerName(round.hukumId) || 'Unknown';
+    const partnerNames = round.partnerNames ? round.partnerNames.join(', ') : 'None';
+    const nonPartnerNames = round.nonPartnerNames ? round.nonPartnerNames.join(', ') : 'None';
+
+    let html = `
+        <div style="background:var(--bg-nav); border:1px solid rgba(255,255,255,0.05); padding:1.2rem; border-radius:var(--radius-md);">
+            <div style="display:flex; justify-content:space-between; margin-bottom:1rem; align-items:center; border-bottom:1px solid rgba(255,255,255,0.05); padding-bottom:0.8rem;">
+                <span style="font-size:0.9rem; color:var(--text-muted);">${formatDateTime(round.timestamp)}</span>
+                <span style="font-size:1rem; font-weight:bold;">Bid: ${round.bid}</span>
+            </div>
+            
+            <div style="display:flex; justify-content:space-between; margin-bottom:1.2rem; align-items:center;">
+                <div style="display:flex; flex-direction:column; gap:0.2rem;">
+                    <span style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Result</span>
+                    <span class="${resClass}" style="font-weight:bold; font-size:1.1rem;">${resLabel}</span>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:0.2rem; text-align:right;">
+                    <span style="font-size:0.8rem; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px;">Score Change</span>
+                    <span class="${scoreChange > 0 ? 'text-success' : (scoreChange < 0 ? 'text-danger' : 'text-muted')}" style="font-weight:900; font-size:1.4rem;">${scoreStr}</span>
+                </div>
+            </div>
+
+            <div style="margin-bottom:1.2rem;">
+                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.4rem; text-transform:uppercase; letter-spacing:0.5px;">Role</span>
+                <span style="font-size:1rem; font-weight:600;">${roleLabel}</span>
+            </div>
+
+            ${!isHukum ? `
+            <div style="margin-bottom:0.8rem;">
+                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">Hukum</span>
+                <span style="font-size:0.95rem;">${hukumName}</span>
+            </div>` : ''}
+
+            <div style="margin-bottom:0.8rem;">
+                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">Partners</span>
+                <span style="font-size:0.95rem;">${partnerNames}</span>
+            </div>
+
+            <div>
+                <span style="display:block; font-size:0.8rem; color:var(--text-muted); margin-bottom:0.2rem;">Non-Partners</span>
+                <span style="font-size:0.95rem;">${nonPartnerNames}</span>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('round-details-popup-body').innerHTML = html;
+    document.getElementById('round-details-popup-modal').classList.add('active');
 };
 
 // =============================================

@@ -300,6 +300,17 @@
         </div>
     </div>
 
+    <!-- Round Details Popup Modal -->
+    <div class="modal-overlay" id="round-details-popup-modal">
+        <div class="modal-box bottom-sheet" style="max-height:80vh; overflow-y:auto; display:flex; flex-direction:column;">
+            <div class="modal-header" style="position:sticky; top:0; background:var(--bg-card); z-index:10; padding-bottom:1rem; border-bottom:1px solid rgba(255,255,255,0.05); margin-bottom:1rem;">
+                <h3 id="round-details-popup-title" style="margin:0;">Round Details</h3>
+                <button class="icon-btn close-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" id="round-details-popup-body" style="flex:1;"></div>
+        </div>
+    </div>
+
     <!-- Hidden Share Card (captured by html2canvas) -->
     <div id="share-card-wrapper" style="position:fixed; left:-9999px; top:0; z-index:-1;">
         <div id="share-card"></div>

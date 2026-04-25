@@ -807,6 +807,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--gold-primary); }
     padding: 0.8rem;
     text-align: center;
 }
+.bw-card.clickable {
+    cursor: pointer;
+    transition: transform 0.2s ease, background 0.2s ease;
+}
+.bw-card.clickable:active, .bw-card.clickable:hover {
+    transform: translateY(-2px) scale(1.02);
+    background: rgba(255,255,255,0.08);
+}
 .bw-label {
     font-size: 0.72rem;
     color: var(--text-muted);
