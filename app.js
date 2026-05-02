@@ -2130,6 +2130,18 @@ async function generateShareImage(populateFn) {
 async function shareImageBlob(blob, title) {
     if (!blob) return;
 
+    if (window.FlutterShare) {
+        // We are inside the Flutter APK
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = function() {
+            const base64data = reader.result;
+            window.FlutterShare.postMessage(base64data);
+            showToast('Opening share options...');
+        }
+        return;
+    }
+
     const file = new File([blob], '3patti-pro.png', { type: 'image/png' });
 
     if (navigator.canShare && navigator.canShare({ files: [file] })) {
