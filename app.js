@@ -2656,3 +2656,31 @@ window.migrateToFirestore = async function() {
 // =============================================
 
 initFirestoreListeners();
+
+// =============================================
+// ANDROID WEBVIEW BACK GESTURE HANDLER
+// =============================================
+window.handleAndroidBack = function() {
+    // 1. Check if any modal is open
+    const openModals = document.querySelectorAll('.modal-overlay.active');
+    if (openModals.length > 0) {
+        // Close the top-most modal
+        openModals[openModals.length - 1].classList.remove('active');
+        return true; // handled
+    }
+    
+    // 2. Check if we are in profile view
+    if (activeViewId === 'view-profile') {
+        navTo('view-ranks');
+        return true;
+    }
+    
+    // 3. Check if not on home screen
+    if (activeViewId !== 'view-home') {
+        navTo('view-home');
+        return true; // handled
+    }
+    
+    // 4. Exit app
+    return false;
+};
