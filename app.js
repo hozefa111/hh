@@ -1788,10 +1788,12 @@ window.openRolePopup = function(playerId, role) {
                 subtext = `Partners: ${parts}<br>Non-Partners: ${nons}`;
             } else if (role === 'partner') {
                 const otherParts = (round.partnerNames || []).filter(n => n !== player.name).join(', ');
-                subtext = `Hukum: ${round.hukumName || 'Unknown'}${otherParts ? '<br>Other Partners: ' + otherParts : ''}`;
+                const nonParts = (round.nonPartnerNames || []).join(', ');
+                subtext = `Hukum: ${round.hukumName || 'Unknown'}${otherParts ? '<br>Other Partners: ' + otherParts : ''}${nonParts ? '<br>Non-Partners: ' + nonParts : ''}`;
             } else {
                 const parts = round.partnerNames ? round.partnerNames.join(', ') : 'None';
-                subtext = `Hukum: ${round.hukumName || 'Unknown'}<br>Partners: ${parts}`;
+                const otherNonParts = (round.nonPartnerNames || []).filter(n => n !== player.name).join(', ');
+                subtext = `Hukum: ${round.hukumName || 'Unknown'}<br>Partners: ${parts}${otherNonParts ? '<br>Other Non-Partners: ' + otherNonParts : ''}`;
             }
 
             listHtml += `<div style="background:var(--bg-nav); border:1px solid rgba(255,255,255,0.05); padding:0.8rem; border-radius:var(--radius-sm); margin-bottom:0.5rem;">
