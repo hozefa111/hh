@@ -16,7 +16,7 @@ let isAdminUser = false;
 let firestoreReady = false;
 
 let sessions = [];
-let sessionState = { isActive: false, startTime: null };
+let sessionState = { isActive: false, startTime: null, customName: null, activeSessionId: null };
 
 // === UI STATE ===
 let activeViewId = 'view-home';
@@ -171,35 +171,42 @@ function initFirestoreListeners() {
         console.error('Rounds listener error:', err);
     });
 
-    // Session state
-    db.collection('meta').doc('session').onSnapshot(doc => {
-        if (doc.exists) {
-            const data = doc.data();
-            sessionState = {
-                isActive: data.isActive || false,
-                startTime: data.startTime ? safeToDate(data.startTime) : null,
-                customName: data.customName || null
-            };
-        } else {
-            sessionState = { isActive: false, startTime: null, customName: null };
-        }
-        renderCurrentView();
-    }, err => {
-        console.error('Session state listener error:', err);
-    });
+    // Session state - derived from sessions collection (no meta/session dependency)
+    // Active session = most recent session where endTime is null
+    // This is compatible with both web app and Flutter app
 
-    // Sessions collection
-    db.collection('sessions').orderBy('endTime', 'desc').onSnapshot(snap => {
+    // Sessions collection - also derives active session state
+    db.collection('sessions').onSnapshot(snap => {
         sessions = snap.docs.map(doc => {
             const data = doc.data();
             return {
                 id: doc.id,
                 ...data,
                 startTime: data.startTime ? safeToDate(data.startTime) : new Date(),
-                endTime: data.endTime ? safeToDate(data.endTime) : new Date()
+                endTime: data.endTime ? safeToDate(data.endTime) : null
             };
         });
-        if (activeViewId === 'view-history') renderCurrentView();
+        // Sort: active sessions (endTime=null) first, then by endTime desc
+        sessions.sort((a, b) => {
+            if (!a.endTime && !b.endTime) return (b.startTime || 0) - (a.startTime || 0);
+            if (!a.endTime) return -1;
+            if (!b.endTime) return 1;
+            return b.endTime - a.endTime;
+        });
+
+        // Derive active session state from sessions list
+        const activeSession = sessions.find(s => !s.endTime);
+        if (activeSession) {
+            sessionState = {
+                isActive: true,
+                startTime: activeSession.startTime || null,
+                customName: activeSession.sessionName || null,
+                activeSessionId: activeSession.id
+            };
+        } else {
+            sessionState = { isActive: false, startTime: null, customName: null, activeSessionId: null };
+        }
+        renderCurrentView();
     }, err => {
         console.error('Sessions listener error:', err);
     });
@@ -802,16 +809,34 @@ window.executeStartSession = async function(saveCustomName) {
     const customName = saveCustomName && input.value.trim() ? input.value.trim() : null;
     closeModal('start-session-modal');
 
+    // Prevent double-start
+    if (sessionState.isActive) {
+        showToast('A session is already active!');
+        return;
+    }
+
+    const mos = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const now = new Date();
+    const defaultName = 'Session ' + now.getDate() + ' ' + mos[now.getMonth()] + ' ' + now.getFullYear();
+
     try {
-        await db.collection('meta').doc('session').set({
-            isActive: true,
+        await db.collection('sessions').add({
+            sessionName: customName || defaultName,
             startTime: firebase.firestore.FieldValue.serverTimestamp(),
-            customName: customName
+            endTime: null,
+            totalRounds: 0,
+            leaderboard: [],
+            mvp: null,
+            bestHukum: null,
+            biggestWin: { name: '-', score: 0 },
+            biggestLoss: { name: '-', score: 0 },
+            streaks: [],
+            badges: {}
         });
         showToast('Session started! \uD83C\uDFB2');
     } catch (err) {
         console.error('Start session error:', err);
-        showToast('Failed to start session');
+        showToast('Failed to start session: ' + err.message);
     }
 };
 
@@ -832,8 +857,15 @@ window.endSession = async function() {
 
     if (sessionRounds.length === 0) {
         showConfirm('No rounds played this session. End anyway?', 'End Session', async () => {
-            await db.collection('meta').doc('session').set({ isActive: false, startTime: null, customName: null });
-            showToast('Session ended');
+            try {
+                await db.collection('sessions').doc(sessionState.activeSessionId).update({
+                    endTime: firebase.firestore.FieldValue.serverTimestamp()
+                });
+                showToast('Session ended');
+            } catch (err) {
+                console.error('End session error:', err);
+                showToast('Failed to end session: ' + err.message);
+            }
         });
         return;
     }
@@ -959,18 +991,17 @@ window.endSession = async function() {
         badges: tempBadges
     };
 
-    // Save to Firestore
+    // Save to Firestore - update existing session doc instead of creating new one
     try {
-        await db.collection('sessions').add({
+        await db.collection('sessions').doc(sessionState.activeSessionId).update({
             ...sessionData,
             startTime: firebase.firestore.Timestamp.fromDate(sessionStart),
             endTime: firebase.firestore.FieldValue.serverTimestamp()
         });
-        await db.collection('meta').doc('session').set({ isActive: false, startTime: null, customName: null });
         showSessionSummaryModal(sessionData);
     } catch (err) {
         console.error('End session error:', err);
-        showToast('Failed to end session');
+        showToast('Failed to end session: ' + err.message);
     }
 };
 
@@ -1028,9 +1059,8 @@ window.executeClearAllData = async function() {
         }
         console.log("Finished deleting sessions.");
 
-        // 3. Reset session meta
-        console.log("Resetting session meta...");
-        await db.collection('meta').doc('session').set({ isActive: false, startTime: null, customName: null });
+        // 3. Session meta no longer needed (sessions collection manages state)
+        console.log("Session cleanup complete via sessions collection deletion above.");
 
         console.log("Data wipe complete. Player score fields are auto-reset due to history wipe.");
         
