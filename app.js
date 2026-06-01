@@ -134,6 +134,15 @@ document.querySelectorAll('.close-modal').forEach(btn => {
 // FIRESTORE REAL-TIME LISTENERS
 // =============================================
 
+// Safe helper to convert any timestamp format to a JS Date object
+function safeToDate(val) {
+    if (!val) return null;
+    if (val instanceof Date) return val;
+    if (typeof val.toDate === 'function') return val.toDate();
+    if (val.seconds !== undefined) return new Date(val.seconds * 1000 + (val.nanoseconds || 0) / 1000000);
+    return new Date(val);
+}
+
 function initFirestoreListeners() {
     // Players collection
     db.collection('players').orderBy('createdAt').onSnapshot(snap => {
@@ -154,7 +163,7 @@ function initFirestoreListeners() {
             return {
                 id: doc.id,
                 ...data,
-                timestamp: data.timestamp ? data.timestamp.toDate() : new Date()
+                timestamp: data.timestamp ? safeToDate(data.timestamp) : new Date()
             };
         });
         renderCurrentView();
@@ -168,7 +177,7 @@ function initFirestoreListeners() {
             const data = doc.data();
             sessionState = {
                 isActive: data.isActive || false,
-                startTime: data.startTime ? data.startTime.toDate() : null,
+                startTime: data.startTime ? safeToDate(data.startTime) : null,
                 customName: data.customName || null
             };
         } else {
@@ -186,8 +195,8 @@ function initFirestoreListeners() {
             return {
                 id: doc.id,
                 ...data,
-                startTime: data.startTime ? data.startTime.toDate() : new Date(),
-                endTime: data.endTime ? data.endTime.toDate() : new Date()
+                startTime: data.startTime ? safeToDate(data.startTime) : new Date(),
+                endTime: data.endTime ? safeToDate(data.endTime) : new Date()
             };
         });
         if (activeViewId === 'view-history') renderCurrentView();
