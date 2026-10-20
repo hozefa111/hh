@@ -1,66 +1,104 @@
-# Kali Ki Tidi integration verification
+# Kali Ki Tidi implementation and release verification
 
-Release candidate: 3 Patti PRO 2.7.0 (Android code 21).
-Branches: `kali-tidi-multiplayer` in `hozefa111/hh` and `hozefa111/Apk`.
+3 Patti PRO candidate: Android 2.7.0, version code 21, existing application ID
+`com.hozefa.threepattipro.nativeapp`. The online game is part of this application.
 
-## Implemented integration
+## Delivered implementation
 
-- Existing Home gains Play Online; manual/voice tracker screens remain available.
-- Shared deck, auction, trick, partner, bot and original Hukum scoring engine.
-- Server-authoritative rooms, approvals, seats, waiting lists, reconnect, deadlines,
-  timeout plays, session lifecycle and admin-last Ready.
-- Human online hands enter existing `rounds` exactly once; bot records stay in
-  session history without becoming human lifetime player records.
-- Responsive felt-table UI, card/legal-move motion, public partner reveal, results,
-  session scorecards, reduced motion and native Android asset-loader integration.
-- Own-hand-only reads, server-owned secret deals, membership-bound presence and
-  immutable online ledgers. Existing manual administrator operations retained.
+- Existing Home gains Play Online; existing manual/voice entry, Players, Rankings,
+  profiles, sessions and History are retained.
+- Complete four/six-seat 250-point gameplay: configured decks, secure deal,
+  clockwise auction with rotating 155 opener and permanent PASS, Hukum, distinct
+  direct/called partners, follow-suit, tricks and contract evaluation.
+- Approved human admission, seats, waiting lists, bots, reconnection pauses,
+  server deadlines, legal timeout moves, hand results and admin-last Ready.
+- Completed human online hands enter existing Hukum rounds exactly once. Current
+  session totals start at zero; lifetime human records remain unified. Bots keep
+  session history without becoming ordinary lifetime player profiles.
+- Server-only canonical hands and secret teams, own-hand reads, membership-bound
+  presence, serialized commands and immutable online ledgers.
+- Responsive emerald/gold table, card/turn/trick/result motion, reduced motion and
+  bundled Android asset-loader screen with single-use native Auth exchange.
 
-## Verification evidence
+## Actual passing verification
 
-The local test logs and screenshots are retained in
-`/workspace/output/kali-verification/`. Latest local results:
+Runtime web/backend commit: `d35320ee6eeda1a847569e58c71ddb23c56b0bf0`.
+Native integration and backend fixture commit:
+`e1b9b7179b57bd1b5cd01fe875d95de82c64eb17`.
+This report-only update does not change those tested runtime files.
 
-- Shared/backend rules: 47 tests passed.
-- Firebase rules: 6 emulator integration tests passed.
-- Browser multiplayer: final 13-check run passed, including full four-human and
-  six-seat bot hands, original tracker regression, presence restrictions and races.
-- Network failure handling: 2 browser checks passed.
-- Legacy bot/historic labels: 2 browser checks passed.
-- Native-origin browser behavior: 2 checks passed (not Android instrumentation).
-- Android JVM: 189 tests per Sandbox and Release variant, zero failures/errors.
-- Signed Android release, Sandbox and instrumentation APK assembly: passed.
-- Bundled shared asset checksums and backend engine parity: passed during build.
-- Stable certificate SHA-256:
-  `dc0697a03526612bc54c3d9ad0b4a10e9ed9b3b6ad22e4e53269f904a72ba9b4`.
+| Check | Actual result |
+| --- | --- |
+| Shared/backend unit tests | 47 passed; includes 100 seeded full-hand simulations |
+| Firebase security integration | 6 passed |
+| Full browser multiplayer/regression | 13 checks passed |
+| Network-failure browser checks | 2 passed |
+| Legacy names/history browser checks | 2 passed |
+| Native-origin browser checks | 2 passed; separate from Android instrumentation |
+| Android JVM, Sandbox | 189 passed, zero failures/errors |
+| Android JVM, Release | 189 passed, zero failures/errors |
+| Android API 30 instrumentation | 43 passed, zero failures/skips |
+| Android API 35 instrumentation | 43 passed, zero failures/skips |
+| Signed Release/Sandbox/test APK assembly | Passed locally |
+| Shared assets and backend engine checksum parity | Passed |
+| New production backend dependency audit | Zero known advisories |
 
-Emulator tests use synthetic accounts and records only.
+Web CI: https://github.com/hozefa111/hh/actions/runs/39482892895
 
-Production Firebase has not been modified. Web main and the existing native
-release branch have not been merged or deployed.
+Android CI: https://github.com/hozefa111/Apk/actions/runs/39482724841
 
-Signed candidate APK SHA-256 (verification artifact, not a released APK):
-`47270ee1b241229839a7f61ed60e0770b53439766a5fb237ba2837dfb0d00f7b`.
+Android's 43 methods include 39 existing tracker tests and four online tests.
+The latter exercise Home entry, safe bundled loading, invite prefill and actual
+native-to-WebView Firebase Auth identity restoration, including Activity recreation.
+A discovered offline administrator-restoration regression was corrected and the
+full suites were rerun successfully. Cached roles cannot enable offline writes;
+pending local role writes are rejected and server authorization remains required.
 
-Android draft PR: https://github.com/hozefa111/Apk/pull/11
+Browser verification includes separate human clients completing all ten tricks,
+a six-seat game with five bots, exact 250-point captures, legal highlights,
+private-hand restrictions, admission/seat races, disconnect/reconnect, timeout
+idempotency, session isolation and unchanged manual tracker operation. Deadline
+dispatch uses an emulator-only tick; this does not certify production Cloud Tasks.
 
-## Release gates
+New backend versions are Firebase Admin 14.5.0 and Functions 7.4.0, using Node 22
+and Firebase CLI 15.34.0. Java 21 is used for current emulator tooling. Existing
+notification backend dependencies were not changed.
 
-**Not approved for final APK release.** A successful local build does not satisfy
-these remaining gates:
+## Signed candidate evidence
 
-1. Authorized Firebase deployment identity is unavailable in this environment.
-   Provision existing administrator UIDs, audit/backup deployed data, deploy tested
-   rules and the new functions codebase, then enable guest Auth safely. See README.
-2. Real hosted Cloud Tasks/IAM, presence, account exchange and concurrent-device
-   behavior require staging verification. Local tests use an emulator-only task
-   tick, not the production dispatcher.
-3. Local Android device instrumentation could not execute: the machine has no KVM
-   and the software emulator became unresponsive. No new instrumentation methods
-   are reported as passed. API 30/35 CI and actual-phone verification remain required.
-4. Real-phone animation smoothness, native sharing/voice preservation, app updates
-   and lifecycle behavior require device checks. Browser screenshots do not prove
-   Android device performance.
+APK SHA-256:
+`2e41d77385e4720961b6cf8168754e729de2a033c68a0127c5a04bce09157127`
 
-The existing stable signing configuration is kept outside the repositories.
-No signing secrets or production data are included in the implementation.
+Stable signing certificate SHA-256, matching the preserved v2.6.2 baseline:
+`dc0697a03526612bc54c3d9ad0b4a10e9ed9b3b6ad22e4e53269f904a72ba9b4`
+
+The keystore stays outside the repositories. A signed candidate exists, but it
+has not been published as a final APK release.
+
+## Remaining release gates
+
+**Release readiness: blocked on hosted rollout and physical-device verification.**
+
+1. Firebase CLI reports no authorized deployment account. An authorized operator
+   must provision existing administrator UIDs, audit and back up deployed data,
+   then deploy the compatible backend and restrictive rules in the README order.
+   Production Firebase data and rules have not been modified.
+2. Real hosted Cloud Tasks dispatch, IAM/custom-token signing, admission,
+   multi-device presence and reconnect must pass staging verification. Emulator
+   success does not establish those production permissions or billing settings.
+3. Physical-phone gameplay, microphone/voice availability, native sharing,
+   update/install behavior, large text and animation/frame performance require
+   device QA. Instrumentation evidence covers API 30 and 35 emulators; it does
+   not claim universal Android-version or physical-device certification.
+
+No destructive migration was run. The existing main web application and native
+release branch were not merged or published. The v2.6.2 APK baseline and original
+Git commits remain available for recovery. See `online/README.md` for rollout.
+
+## Review sources
+
+- Web/backend draft: https://github.com/hozefa111/hh/pull/1
+- Same-APK draft: https://github.com/hozefa111/Apk/pull/11
+
+Local evidence is retained in `/workspace/output/kali-verification/`, including
+hosted web artifacts, native XML reports, screenshots, build logs and signatures.
