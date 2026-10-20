@@ -4,6 +4,15 @@ Kali Ki Tidi is the online card-playing mode of the existing game. It shares
 Firebase Auth, human `players`, Hukum `rounds`, `sessions`, scoring and lifetime
 statistics. It does not create an independent lifetime leaderboard.
 
+## Free prototype deployment (current requirement)
+
+The user requires **no paid plan**. Firebase Spark remains in place. Use
+[`backend/free/README.md`](../backend/free/README.md) for the Workers Free +
+SQLite Durable Object API adapter. The Cloud Functions instructions below
+describe the earlier optional Blaze adapter and **must not be executed for this
+free prototype**. Account authorization, deployed endpoint configuration,
+controlled security-rule rollout and hosted verification are still release gates.
+
 ## Run and verify
 
 Use Node 22, Java 21, Firebase CLI 15.34.0 and Python 3. Functions v7
@@ -105,20 +114,21 @@ RTDB connection records pause a genuine disconnected hand. Remaining time and
 cards are preserved; admin resumes after reconnection. Backgrounding an otherwise
 connected device is ordinary inactivity, so server deadlines still apply.
 
-## Production setup: required before release
+## Optional Cloud Functions deployment (requires Blaze; not the free prototype)
 
-No production data or rules have been changed by local development.
+Existing historic player, round and session records were preserved. The free
+prototype rollout added an explicit role for the established administrator and
+deployed the tested restrictive Firestore/RTDB rules after private backups.
+See `VERIFICATION.md` for the current deployment state.
 
 1. Obtain an authorized Firebase deployment identity for `patti-pro-a61d8`.
    Provision each existing administrator's Auth UID in `admins/{uid}` through a
    trusted operator/Admin SDK **before** tightening rules or shipping the new role
    checks. Do not use a published password example as credentials.
-2. Keep Anonymous Auth disabled until the restrictive rules have been deployed
-   and verified; enabling guests while legacy write-all-auth rules remain is unsafe.
-   Create/configure the
-   default RTDB instance in **us-central1**, matching `online/config.js` and the
-   presence trigger. If an existing instance is reused, update its URL and trigger
-   region together; do not assume the instance has already been created.
+2. Audit the existing authentication configuration before changing it. The
+   production audit found Anonymous Auth already enabled and the default RTDB
+   already present in **us-central1**. Do not recreate either or enable guests
+   blindly while permissive legacy rules remain. Preserve existing identities.
 3. Confirm Functions billing and required APIs. Grant the runtime service identity
    the required Firestore/Auth/RTDB access, task-enqueue/invoke permissions and
    IAM service-account signing permission for custom-token exchange. Verify the

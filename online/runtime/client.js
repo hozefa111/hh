@@ -9,7 +9,7 @@ if (emulator) {
   db.useEmulator(window.KALI_HOST || location.hostname, 8080);
   presence.useEmulator(window.KALI_HOST || location.hostname, 9e3);
 }
-const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
+const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : window.KALI_API_BASE || "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
 let subscribedRoomId = null, loadingRoom = false, connectionReady = false;
 let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
 let renderFrame = null, motionQueue = [];

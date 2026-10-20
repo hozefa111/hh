@@ -19,14 +19,16 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - run: npm ci && npm ci --prefix functions/online
+      - run: npm ci && npm ci --prefix functions/online && npm ci --prefix backend/free
       - run: npm run build && npm test && npm run check
+      - name: Free backend bundle, unit tests and deployment preflight
+        run: npm run verify --prefix backend/free
       - run: npx playwright install --with-deps chromium
       - name: Security and actual browser multiplayer
         run: |
           mkdir -p test-results
           python3 -m http.server 8765 --bind 127.0.0.1 >test-results/http.log 2>&1 &
-          npx --yes firebase-tools@15.34.0 emulators:exec --project demo-three-patti --only auth,firestore,database,functions 'npm run test:rules && npm run test:network && npm run test:browser && npm run test:legacy-labels && npm run test:native-origin'
+          npx --yes firebase-tools@15.34.0 emulators:exec --project demo-three-patti --only auth,firestore,database,functions 'npm run test:rules && npm run test:network && npm run test:browser && npm run test:legacy-labels && npm run test:native-origin && KALI_WORKER_INTEGRATION=1 npm test --prefix backend/free'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

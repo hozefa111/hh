@@ -18,3 +18,7 @@ test-results/
 *.p12
 *.jks
 *.keystore
+backend/free/dist/
+backend/free/.wrangler/
+backend/free/.dev.vars*
+*service-account*.json

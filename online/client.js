@@ -6,7 +6,7 @@ const config=emulator?{...KALI_CONFIG,projectId:'demo-three-patti',apiKey:'demo-
 firebase.initializeApp(config);const auth=firebase.auth(),db=firebase.firestore(),presence=firebase.database();
 if(emulator){auth.useEmulator('http://'+(window.KALI_HOST||location.hostname)+':9099',{disableWarnings:true});db.useEmulator(window.KALI_HOST||location.hostname,8080);presence.useEmulator(window.KALI_HOST||location.hostname,9000);}
 // Memory-only Firestore cache: private hands never enter persistent offline storage.
-const host=emulator?'http://'+(window.KALI_HOST||location.hostname)+':5001/'+config.projectId+'/asia-south1/':'https://asia-south1-'+config.projectId+'.cloudfunctions.net/';
+const host=emulator?'http://'+(window.KALI_HOST||location.hostname)+':5001/'+config.projectId+'/asia-south1/':(window.KALI_API_BASE||'https://asia-south1-'+config.projectId+'.cloudfunctions.net/');
 let subscribedRoomId=null,loadingRoom=false,connectionReady=false;
 let user=null,admin=false,room=null,own={cards:[]},profiles=[],memberships=[],unsubs=[],connection=null,clockAnchor={server:Date.now(),mono:performance.now()},busy=false,selected=null,previous=null,scoreOpen=false,historyOpen=false,historyMore=true,records=[],error='',screen='home';
 let renderFrame=null,motionQueue=[];

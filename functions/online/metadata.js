@@ -1,6 +1,6 @@
 'use strict';
-const R=require('./shared/engine');const {Timestamp}=require('firebase-admin/firestore');
-function sessionRecord(room){const board=R.standings(room,true),stats=room.stats||{};
+const R=require('./shared/engine');
+function sessionRecord(room,Timestamp={fromMillis:ms=>new Date(ms)}){const board=R.standings(room,true),stats=room.stats||{};
  const hukum=Object.entries(stats).filter(([,s])=>s.asHukum>0).sort((a,b)=>b[1].hukumWins/b[1].asHukum-a[1].hukumWins/a[1].asHukum||b[1].asHukum-a[1].asHukum)[0];
  const bestHukum=hukum?{name:room.scoreNames[hukum[0]],winRate:Math.round(hukum[1].hukumWins/hukum[1].asHukum*100),wins:hukum[1].hukumWins,total:hukum[1].asHukum}:null;
  const entries=Object.entries(stats).filter(([,s])=>s.roundsPlayed>0),maxIds=field=>{const highest=Math.max(0,...entries.map(([,s])=>s[field]||0));return highest>0?entries.filter(([,s])=>s[field]===highest).map(([id])=>id):[];};

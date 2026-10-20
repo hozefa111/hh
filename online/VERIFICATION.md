@@ -25,7 +25,8 @@
 Runtime web/backend commit: `d35320ee6eeda1a847569e58c71ddb23c56b0bf0`.
 Native integration and backend fixture commit:
 `e1b9b7179b57bd1b5cd01fe875d95de82c64eb17`.
-This report-only update does not change those tested runtime files.
+Those are the previously verified baseline commits. The free-backend changes below
+are subsequent implementation and have separate evidence.
 
 | Check | Actual result |
 | --- | --- |
@@ -79,13 +80,21 @@ has not been published as a final APK release.
 
 **Release readiness: blocked on hosted rollout and physical-device verification.**
 
-1. Firebase CLI reports no authorized deployment account. An authorized operator
-   must provision existing administrator UIDs, audit and back up deployed data,
-   then deploy the compatible backend and restrictive rules in the README order.
-   Production Firebase data and rules have not been modified.
-2. Real hosted Cloud Tasks dispatch, IAM/custom-token signing, admission,
-   multi-device presence and reconnect must pass staging verification. Emulator
-   success does not establish those production permissions or billing settings.
+1. Firebase CLI authorization succeeded. A read-only production audit/back-up
+   captured 421 Firestore documents, 38 Auth identities and deployed rules; RTDB
+   is empty and its rules were backed up. Historic player/round/session records remain unchanged. The sole established
+   signed-in tracker account received an explicit administrator role before the
+   tested restrictive Firestore/RTDB rules were deployed successfully. A dedicated
+   backend service account has only project-scoped database/auth access.
+   Billing is disabled. The user explicitly requires a free prototype: **do not
+   enable Blaze or deploy the Cloud Functions/Tasks adapter**.
+2. The replacement API uses Cloudflare Workers Free + SQLite Durable Object
+   alarms, existing Firebase Auth, and transactional Firestore REST persistence.
+   Cloudflare device authorization and server-secret provisioning succeeded.
+   The Worker deployed at `https://three-patti-pro-online.three-patti-free-backend.workers.dev/`,
+   and both shared/native clients are configured to that origin. The newly created
+   domain currently returns a TLS handshake failure through the execution network;
+   hosted gameplay is not yet verified. No new final APK has been certified.
 3. Physical-phone gameplay, microphone/voice availability, native sharing,
    update/install behavior, large text and animation/frame performance require
    device QA. Instrumentation evidence covers API 30 and 35 emulators; it does
@@ -102,3 +111,20 @@ Git commits remain available for recovery. See `online/README.md` for rollout.
 
 Local evidence is retained in `/workspace/output/kali-verification/`, including
 hosted web artifacts, native XML reports, screenshots, build logs and signatures.
+
+## Free-backend local verification
+
+- Six adapter tests passed, including repeated four/six-seat hands, unified
+  score idempotency, profile ownership and private projections.
+- Real Firestore REST emulator integration passed: complete six-seat hand,
+  exactly 250 captured points, one unified round and native-compatible timestamps.
+- Actual local Cloudflare Worker/Durable Object runtime passed a complete
+  six-seat bot hand with a real 30-second human card timeout, late manual-action
+  rejection, single-use native exchange, origin restrictions and final scores.
+  The final timeout-enabled run took approximately 76 seconds. One earlier run
+  timed out and was rerun; it is not counted as a passing result.
+- Wrangler deployment dry run passed. This is not a production deployment.
+- Free-backend dependency audit: zero known advisories at verification time.
+
+See `backend/free/README.md` for prototype quotas and presence-check latency.
+These local checks do not replace hosted or physical-device verification.

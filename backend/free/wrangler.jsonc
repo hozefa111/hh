@@ -1,0 +1,10 @@
+{
+  "name": "three-patti-pro-online",
+  "main": "dist/worker.mjs",
+  "compatibility_date": "2026-03-01",
+  "workers_dev": true,
+  "vars": {"FIREBASE_PROJECT_ID": "patti-pro-a61d8"},
+  "durable_objects": {"bindings": [{"name": "KALI_COORDINATOR", "class_name": "KaliCoordinator"}]},
+  "migrations": [{"tag": "v1", "new_sqlite_classes": ["KaliCoordinator"]}],
+  "observability": {"enabled": false}
+}
