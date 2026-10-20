@@ -1,0 +1,1 @@
+{"functions":[{"source":"functions/online","codebase":"kali-online","predeploy":["node online/sync-shared.cjs"],"runtime":"nodejs22"}],"firestore":{"rules":"firestore.rules"},"database":{"rules":"database.rules.json"},"emulators":{"auth":{"port":9099},"firestore":{"port":8080},"database":{"port":9000},"functions":{"port":5001},"ui":{"enabled":false},"singleProjectMode":true}}

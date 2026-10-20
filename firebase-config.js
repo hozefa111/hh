@@ -2,20 +2,8 @@
 // 3 PATTI PRO — Firebase Configuration
 // =============================================
 //
-// FIRESTORE SECURITY RULES (set in Firebase Console → Firestore → Rules):
-// -----------------------------------------------------------------------
-// rules_version = '2';
-// service cloud.firestore {
-//   match /databases/{database}/documents {
-//     match /{document=**} {
-//       allow read: if true;
-//       allow write: if request.auth != null;
-//     }
-//   }
-// }
-// -----------------------------------------------------------------------
-//
-// Admin: admin@gmail.com / 12345678
+// Deployable, role-aware rules are maintained in firestore.rules.
+// Provision existing administrator UIDs before deploying rules; never publish passwords.
 
 const firebaseConfig = {
     apiKey: "AIzaSyA9bcA9caD4xmbW-jo9NXC7A66MUBZQbIg",
@@ -27,16 +15,21 @@ const firebaseConfig = {
     measurementId: "G-RM47MXWMG8"
 };
 
+// Local emulator opt-in is restricted to localhost; production hosting never redirects.
+const trackerEmulator=['localhost','127.0.0.1'].includes(location.hostname)&&new URLSearchParams(location.search).get('emulator')==='1';
+if(trackerEmulator){firebaseConfig.projectId='demo-three-patti';firebaseConfig.apiKey='demo-key';}
+
 // Initialize Firebase
 firebase.initializeApp(firebaseConfig);
 
 // Firestore & Auth references (used by app.js)
 const db = firebase.firestore();
 const auth = firebase.auth();
+if(trackerEmulator){auth.useEmulator('http://'+location.hostname+':9099',{disableWarnings:true});db.useEmulator(location.hostname,8080);}
 
 // Analytics (optional, non-blocking)
 try {
-    if (firebase.analytics) {
+    if (firebase.analytics && !trackerEmulator) {
         firebase.analytics();
     }
 } catch (e) {
@@ -62,16 +55,8 @@ document.body.appendChild(msgScript);
 
 window.VAPID_KEY = "BMok8jsI_GYiyLkU4CJzMPTSo7IARqREdA5rOZbp3rIUTneXvZxFOJ4uYZ7nheTIBYDSksEZXHIU2GA4kykyUOA";
 
-/*
-  FIRESTORE SECURITY RULES - ADDED:
-  match /fcmTokens/{tokenId} {
-    allow read: if isAdmin();
-    allow write: if true;
-  }
-  match /pendingNotifications/{docId} {
-    allow read, write: if isAdmin();
-  }
-*/
+// Notification access is defined alongside the role-aware rules in firestore.rules.
+
 
 const notifScript = document.createElement('script');
 notifScript.src = 'notifications.js';

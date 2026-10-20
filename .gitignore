@@ -7,3 +7,14 @@ prompting/
 repo_check/
 installation_id
 mcp_config.json
+
+node_modules/
+*-debug.log
+.firebase/
+playwright-report/
+test-results/
+
+.env
+*.p12
+*.jks
+*.keystore

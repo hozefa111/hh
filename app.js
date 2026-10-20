@@ -10,6 +10,7 @@
 // === APP STATE (populated by Firestore listeners) ===
 let players = [];
 let rounds = [];
+const onlineParticipantNames = new Map();
 let currentUser = null;
 let isAdminUser = false;
 
@@ -39,9 +40,15 @@ const BID_STEP = 5;
 // AUTH MANAGEMENT
 // =============================================
 
-auth.onAuthStateChanged(user => {
+auth.onAuthStateChanged(async user => {
     currentUser = user;
-    isAdminUser = !!user;
+    isAdminUser = false;
+    if (user && !user.isAnonymous) {
+        try {
+            const [token, role] = await Promise.all([user.getIdTokenResult(), db.collection('admins').doc(user.uid).get()]);
+            if (auth.currentUser && auth.currentUser.uid === user.uid) isAdminUser = token.claims.admin === true || role.exists;
+        } catch (_) { isAdminUser = false; }
+    }
     updateAuthUI();
     renderCurrentView();
     checkMigration();
@@ -90,7 +97,7 @@ document.getElementById('login-form').addEventListener('submit', async (e) => {
         await auth.signInWithEmailAndPassword(email, password);
         document.getElementById('login-modal').classList.remove('active');
         document.getElementById('login-form').reset();
-        showToast('Logged in as Admin! 🔓');
+        showToast('Signed in successfully 🔓');
     } catch (err) {
         errEl.textContent = getAuthErrorMessage(err.code);
         errEl.style.display = 'block';
@@ -166,6 +173,8 @@ function initFirestoreListeners() {
                 timestamp: data.timestamp ? safeToDate(data.timestamp) : new Date()
             };
         });
+        onlineParticipantNames.clear();
+        for (const r of rounds) for (const p of Array.isArray(r.participants) ? r.participants : []) if (!onlineParticipantNames.has(p.playerId)) onlineParticipantNames.set(p.playerId, p.name);
         renderCurrentView();
     }, err => {
         console.error('Rounds listener error:', err);
@@ -195,7 +204,7 @@ function initFirestoreListeners() {
         });
 
         // Derive active session state from sessions list
-        const activeSession = sessions.find(s => !s.endTime);
+        const activeSession = sessions.find(s => !s.endTime && s.source !== 'online');
         if (activeSession) {
             sessionState = {
                 isActive: true,
@@ -336,7 +345,7 @@ function formatDuration(ms) {
 
 function getPlayerName(playerId) {
     const p = players.find(x => x.id === playerId);
-    return p ? p.name : 'Unknown';
+    return p ? p.name : (onlineParticipantNames.get(playerId) || 'Unknown');
 }
 
 function getActivePlayers() {
@@ -352,6 +361,7 @@ function getGameRounds() {
 // =============================================
 
 function calculateScoreChanges(playerIds, bid, hukumId, partnerIds, result) {
+    if (typeof KaliRules !== 'undefined') return KaliRules.score(playerIds, bid, hukumId, partnerIds, result);
     const changes = {};
     const nonPartnerIds = playerIds.filter(id => id !== hukumId && !partnerIds.includes(id));
 
@@ -852,7 +862,7 @@ window.endSession = async function() {
     // Get rounds in this session
     const sessionRounds = getGameRounds().filter(r => {
         const d = r.timestamp instanceof Date ? r.timestamp : new Date(r.timestamp);
-        return d >= sessionStart && d <= sessionEnd;
+        return PattiSession.includes(r, {id: sessionState.activeSessionId, startTime: sessionStart, endTime: sessionEnd, source: 'manual'});
     });
 
     if (sessionRounds.length === 0) {
@@ -1046,6 +1056,7 @@ window.executeClearAllData = async function() {
         const allRounds = await db.collection('rounds').get();
         console.log(`Found ${allRounds.size} rounds to delete.`);
         for (const doc of allRounds.docs) {
+            if (doc.data().source === 'online') continue;
             await doc.ref.delete();
         }
         console.log("Finished deleting rounds.");
@@ -1055,6 +1066,7 @@ window.executeClearAllData = async function() {
         const allSessions = await db.collection('sessions').get();
         console.log(`Found ${allSessions.size} sessions to delete.`);
         for (const doc of allSessions.docs) {
+            if (doc.data().source === 'online') continue;
             await doc.ref.delete();
         }
         console.log("Finished deleting sessions.");
@@ -1065,7 +1077,7 @@ window.executeClearAllData = async function() {
         console.log("Data wipe complete. Player score fields are auto-reset due to history wipe.");
         
         closeModal('clear-data-modal');
-        showToast('All data cleared successfully! \uD83D\uDDD1\uFE0F');
+        showToast('Manual history cleared; online records preserved. \uD83D\uDDD1\uFE0F');
         renderCurrentView();
 
     } catch (error) {
@@ -1077,6 +1089,7 @@ window.executeClearAllData = async function() {
     }
 };
 
+function sessionParticipantName(data, id) { return (data.leaderboard || []).find(p => p.id === id || p.playerId === id)?.name || getPlayerName(id); }
 function showSessionSummaryModal(data) {
     const body = document.getElementById('session-summary-body');
     let html = '';
@@ -1096,13 +1109,13 @@ function showSessionSummaryModal(data) {
     html += '<div class="session-summary-card">';
     html += '<div class="session-summary-title">\uD83C\uDFC6 Awards</div>';
     if (data.mvp) {
-        html += `<div class="session-summary-stat"><span class="label">\uD83C\uDFC5 MVP</span><span class="value text-success">${data.mvp.name} (+${data.mvp.score})</span></div>`;
+        html += `<div class="session-summary-stat"><span class="label">\uD83C\uDFC5 MVP</span><span class="value text-success">${sanitizeHTML(data.mvp.name)} (+${data.mvp.score})</span></div>`;
     }
     if (data.bestHukum) {
-        html += `<div class="session-summary-stat"><span class="label">\uD83D\uDC51 Best Hukum</span><span class="value">${data.bestHukum.name} (${data.bestHukum.winRate}%)</span></div>`;
+        html += `<div class="session-summary-stat"><span class="label">\uD83D\uDC51 Best Hukum</span><span class="value">${sanitizeHTML(data.bestHukum.name)} (${data.bestHukum.winRate}%)</span></div>`;
     }
-    html += `<div class="session-summary-stat"><span class="label">\uD83D\uDCC8 Biggest Win</span><span class="value text-success">${data.biggestWin.name} (+${data.biggestWin.score})</span></div>`;
-    html += `<div class="session-summary-stat"><span class="label">\uD83D\uDCC9 Biggest Loss</span><span class="value text-danger">${data.biggestLoss.name} (${data.biggestLoss.score})</span></div>`;
+    html += `<div class="session-summary-stat"><span class="label">\uD83D\uDCC8 Biggest Win</span><span class="value text-success">${sanitizeHTML(data.biggestWin.name)} (+${data.biggestWin.score})</span></div>`;
+    html += `<div class="session-summary-stat"><span class="label">\uD83D\uDCC9 Biggest Loss</span><span class="value text-danger">${sanitizeHTML(data.biggestLoss.name)} (${data.biggestLoss.score})</span></div>`;
 
     if (data.badges) {
         const bdgList = [
@@ -1116,7 +1129,7 @@ function showSessionSummaryModal(data) {
         bdgList.forEach(b => {
             const arr = data.badges[b.id];
             if (arr && arr.length > 0) {
-                const names = arr.map(id => sanitizeHTML(getPlayerName(id))).join(', ');
+                const names = arr.map(id => sanitizeHTML(sessionParticipantName(data, id))).join(', ');
                 html += `<div class="session-summary-stat"><span class="label">${b.icon}</span><span class="value">${names}</span></div>`;
             }
         });
@@ -1487,6 +1500,8 @@ async function saveRoundData() {
 
     const roundDoc = {
         type: 'hukum',
+        source: 'manual',
+        sessionId: sessionState.activeSessionId || null,
         timestamp: firebase.firestore.FieldValue.serverTimestamp(),
         bid: bid,
         hukumId: hukum,
@@ -1977,8 +1992,8 @@ function renderHistory() {
     let html = '';
     gameRounds.forEach(round => {
         const hName = round.hukumName || getPlayerName(round.hukumId);
-        const partnerNames = (round.partnerNames || round.partnerIds.map(id => getPlayerName(id))).join(', ');
-        const nonPartnerNames = (round.nonPartnerNames || round.nonPartnerIds.map(id => getPlayerName(id))).join(', ');
+        const partnerNames = (round.partnerNames || (round.partnerIds || []).map(id => getPlayerName(id))).join(', ');
+        const nonPartnerNames = (round.nonPartnerNames || (round.nonPartnerIds || []).map(id => getPlayerName(id))).join(', ');
         const resultLabel = round.result === 'win' ? 'Hukum Win' : 'Hukum Lose';
         const resultClass = round.result === 'win' ? 'win' : 'loss';
 
@@ -1988,7 +2003,7 @@ function renderHistory() {
                 <span class="history-card-result ${resultClass}">${resultLabel}</span>
                 <div class="history-card-actions">
                     <button class="history-share-btn" onclick="shareRoundResult('${round.id}')" title="Share"><i class="fa-solid fa-share-nodes"></i></button>
-                    ${isAdminUser ? `<button class="history-delete-btn admin-only" onclick="deleteRound('${round.id}')" title="Delete round"><i class="fa-solid fa-trash-can"></i></button>` : ''}
+                    ${isAdminUser && round.source !== 'online' ? `<button class="history-delete-btn admin-only" onclick="deleteRound('${round.id}')" title="Delete round"><i class="fa-solid fa-trash-can"></i></button>` : ''}
                 </div>
             </div>
             <div class="history-card-body">
@@ -1998,7 +2013,7 @@ function renderHistory() {
             </div>
             <div class="history-card-scores">
                 ${Object.entries(round.scoreChanges || {}).map(([pid, change]) => {
-                    const name = getPlayerName(pid);
+                    const name = sanitizeHTML((round.participants || []).find(p => p.playerId === pid)?.name || getPlayerName(pid));
                     if (change === 0) {
                         return `<span class="history-score-tag zero-change"><span style="color:var(--text-muted)">${name}</span> <span style="color:var(--text-muted);font-weight:400;">—</span></span>`;
                     }
@@ -2037,7 +2052,7 @@ function renderPastSessions() {
         } else {
             headerHTML = `<div class="session-history-header" style="justify-content:space-between; align-items:flex-start; margin-bottom:0.5rem;">
                 <div style="font-weight:700; color:var(--gold-primary); font-size:1.05rem;">${sanitizeHTML(nameFallback)}</div>
-                ${isAdminUser ? `<div style="display:flex; gap:0.5rem;">
+                ${isAdminUser && session.source !== 'online' ? `<div style="display:flex; gap:0.5rem;">
                     <button class="icon-btn admin-only text-muted" onclick="event.stopPropagation(); editSessionName('${session.id}')" title="Edit Session Name"><i class="fa-solid fa-pencil"></i></button>
                     <button class="icon-btn admin-only" onclick="event.stopPropagation(); deleteSession('${session.id}')" style="color:var(--danger);" title="Delete Session"><i class="fa-solid fa-trash-can"></i></button>
                 </div>` : ''}
@@ -2113,6 +2128,7 @@ window.saveSessionName = async function(id) {
 };
 
 window.deleteSession = function(id) {
+    if (sessions.find(s => s.id === id)?.source === 'online') { showToast('Online session history is managed by its room.'); return; }
     showConfirm('Delete this session? This cannot be undone.', 'Delete', async () => {
         try {
             await db.collection('sessions').doc(id).delete();
@@ -2376,7 +2392,7 @@ window.shareSessionSummary = async function() {
             bdgList.forEach(b => {
                 const arr = lastSession.badges[b.id];
                 if (arr && arr.length > 0) {
-                    const names = arr.map(id => sanitizeHTML(getPlayerName(id))).join(', ');
+                    const names = arr.map(id => sanitizeHTML(sessionParticipantName(lastSession, id))).join(', ');
                     awardsHTML += `<div class="share-card-row"><span>${b.icon}</span><strong style="text-align:right;">${names}</strong></div>`;
                 }
             });
@@ -2485,7 +2501,7 @@ window.savePlayerName = async function(pid) {
 
         // Update name in all past rounds where this player appears
         const roundsWithPlayer = rounds.filter(r =>
-            r.playerIds && r.playerIds.includes(pid)
+            r.source !== 'online' && r.playerIds && r.playerIds.includes(pid)
         );
 
         const batch = db.batch();
@@ -2556,6 +2572,7 @@ window.removePlayer = function(pid) {
 
 // Delete Round
 window.deleteRound = function(roundId) {
+    if (rounds.find(r => r.id === roundId)?.source === 'online') { showToast('Completed online hands are immutable.'); return; }
     showConfirm('Delete this round? Score changes will be reversed.', 'Delete', async () => {
         try {
             await db.collection('rounds').doc(roundId).delete();

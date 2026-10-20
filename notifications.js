@@ -3,10 +3,12 @@ window.requestNotificationPermission = async function() {
   try {
     const permission = await Notification.requestPermission();
     if (permission === 'granted') {
+      if (!firebase.auth().currentUser) await firebase.auth().signInAnonymously();
       const messaging = firebase.messaging();
       const token = await messaging.getToken({ vapidKey: window.VAPID_KEY });
       if (token) {
         await firebase.firestore().collection('fcmTokens').add({
+            uid: firebase.auth().currentUser?.uid || null,
           token: token,
           createdAt: firebase.firestore.FieldValue.serverTimestamp()
         });

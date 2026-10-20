@@ -1,0 +1,9 @@
+'use strict';
+const R=require('./shared/engine');const {Timestamp}=require('firebase-admin/firestore');
+function sessionRecord(room){const board=R.standings(room,true),stats=room.stats||{};
+ const hukum=Object.entries(stats).filter(([,s])=>s.asHukum>0).sort((a,b)=>b[1].hukumWins/b[1].asHukum-a[1].hukumWins/a[1].asHukum||b[1].asHukum-a[1].asHukum)[0];
+ const bestHukum=hukum?{name:room.scoreNames[hukum[0]],winRate:Math.round(hukum[1].hukumWins/hukum[1].asHukum*100),wins:hukum[1].hukumWins,total:hukum[1].asHukum}:null;
+ const entries=Object.entries(stats).filter(([,s])=>s.roundsPlayed>0),maxIds=field=>{const highest=Math.max(0,...entries.map(([,s])=>s[field]||0));return highest>0?entries.filter(([,s])=>s[field]===highest).map(([id])=>id):[];};
+ const badges={hukumKing:maxIds('asHukum'),unlucky:maxIds('losses'),hotStreak:entries.filter(([,s])=>(s.positiveBest||0)>=3).map(([id])=>id),sharpPartner:entries.filter(([,s])=>s.asPartner>=3&&s.partnerWins/s.asPartner>=.8).map(([id])=>id),mvp:board.filter(p=>p.rank===1).map(p=>p.id),riskTaker:room.riskTakers||[]};
+ return {source:'online',roomId:room.id,mode:room.mode,sessionName:'Online · '+room.code,startTime:Timestamp.fromMillis(room.startedAt||room.createdAt),endTime:room.endedAt?Timestamp.fromMillis(room.endedAt):null,totalRounds:room.completed,leaderboard:board.map(p=>({...p,playerId:p.id,total:p.score,roundsPlayed:stats[p.id]?.roundsPlayed||0})),mvp:board.length?{name:board.filter(p=>p.rank===1).map(p=>p.name).join(' & '),score:board[0].score}:null,bestHukum,biggestWin:room.biggestWin||{name:'-',score:0},biggestLoss:room.biggestLoss||{name:'-',score:0},streaks:entries.filter(([,s])=>s.currentStreak>=2).map(([id,s])=>({name:room.scoreNames[id],streak:s.currentStreak})).sort((a,b)=>b.streak-a.streak),badges,duration:((room.endedAt||Date.now())-(room.startedAt||room.createdAt)),status:room.status};}
+module.exports={sessionRecord};

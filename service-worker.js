@@ -1,12 +1,11 @@
-const CACHE_NAME = 'patti-pro-v1';
-const urlsToCache = ['/', '/index.html'];
-self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE_NAME)
-    .then(cache => cache.addAll(urlsToCache)));
-});
-self.addEventListener('fetch', e => {
-  e.respondWith(caches.match(e.request)
-    .then(response => response || fetch(e.request)));
+// Cache only public same-origin assets. Online/private network traffic is never cached.
+const CACHE_NAME='patti-pro-online-v1';
+self.addEventListener('install',e=>{self.skipWaiting();});
+self.addEventListener('activate',e=>e.waitUntil((async()=>{for(const key of await caches.keys())if(key!==CACHE_NAME)await caches.delete(key);await self.clients.claim();})()));
+self.addEventListener('fetch',e=>{
+ const u=new URL(e.request.url);
+ if(e.request.method!=='GET'||u.origin!==self.location.origin||!(/\.(css|js|png|svg|woff2)$/.test(u.pathname)||u.pathname.endsWith('.html')))return;
+ e.respondWith((async()=>{const cache=await caches.open(CACHE_NAME);try{const r=await fetch(e.request);if(r.ok)await cache.put(e.request,r.clone());return r;}catch(error){const stored=await cache.match(e.request);if(stored)return stored;throw error;}})());
 });
 
 importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');

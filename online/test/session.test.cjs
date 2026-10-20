@@ -1,0 +1,4 @@
+const {test}=require('node:test'),A=require('node:assert/strict'),S=require('../shared/session');
+const session={id:'manual',startTime:'2026-10-20T10:00:00Z',endTime:null};
+test('legacy timestamp membership preserved; explicit session wins over time',()=>{A(S.includes({timestamp:'2026-10-20T11:00:00Z'},session));A(!S.includes({timestamp:'2026-10-20T09:00:00Z'},session));A(!S.includes({sessionId:'other',timestamp:'2026-10-20T11:00:00Z'},session));A(S.includes({sessionId:'manual',timestamp:'2026-10-19T11:00:00Z'},session));});
+test('online and manual overlapping windows never mix',()=>{A(!S.includes({source:'online',sessionId:'online',timestamp:'2026-10-20T11:00:00Z'},session));A(!S.includes({timestamp:'2026-10-20T11:00:00Z'},{...session,id:'online',source:'online'}));A(S.includes({source:'online',sessionId:'online'},{...session,id:'online',source:'online'}));});

@@ -1,0 +1,466 @@
+"use strict";
+const R = KaliRules, root = document.getElementById("game");
+const emulator = (window.KALI_EMULATOR === true || new URLSearchParams(location.search).get("emulator") === "1") && ["localhost", "127.0.0.1", "appassets.androidplatform.net"].includes(location.hostname);
+const config = emulator ? { ...KALI_CONFIG, projectId: "demo-three-patti", apiKey: "demo-key", databaseURL: "https://demo-three-patti-default-rtdb.firebaseio.com" } : KALI_CONFIG;
+firebase.initializeApp(config);
+const auth = firebase.auth(), db = firebase.firestore(), presence = firebase.database();
+if (emulator) {
+  auth.useEmulator("http://" + (window.KALI_HOST || location.hostname) + ":9099", { disableWarnings: true });
+  db.useEmulator(window.KALI_HOST || location.hostname, 8080);
+  presence.useEmulator(window.KALI_HOST || location.hostname, 9e3);
+}
+const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
+let subscribedRoomId = null, loadingRoom = false, connectionReady = false;
+let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
+let renderFrame = null, motionQueue = [];
+let reduced = localStorage.getItem("kaliReducedMotion") === "true" || matchMedia("(prefers-reduced-motion: reduce)").matches;
+const esc = (v) => String(v != null ? v : "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const uid = () => user == null ? void 0 : user.uid, name = (id) => {
+  var _a;
+  return ((_a = room == null ? void 0 : room.members[id]) == null ? void 0 : _a.name) || "Player";
+};
+const btn = (text, action, disabled = false, style = "") => `<button ${disabled || busy ? "disabled" : ""} data-action="${esc(action)}" class="${style}">${text}</button>`;
+const sign = (n) => (n > 0 ? "+" : "") + n, suit = (s) => R.SYMBOLS[s] || "\u2014";
+const cardHTML = (c, extra = "") => {
+  const v = R.card(c);
+  return `<span class="face ${["H", "D"].includes(v.suit) ? "red" : ""} ${extra}"><b>${v.rank}</b><i>${suit(v.suit)}</i><small>${R.points(c)} pts</small></span>`;
+};
+function notice(s) {
+  document.getElementById("notice").textContent = s;
+  setTimeout(() => document.getElementById("notice").textContent = "", 6e3);
+}
+async function api(body, endpoint = "kaliApi") {
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 25e3);
+  try {
+    const headers = { "Content-Type": "application/json" };
+    if (user) {
+      const aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Connection timed out.")), { once: true }));
+      headers.Authorization = "Bearer " + await Promise.race([user.getIdToken(), aborted]);
+    }
+    const res = await fetch(host + endpoint, { method: "POST", headers, body: JSON.stringify(body), cache: "no-store", signal: controller.signal });
+    let value;
+    try {
+      value = await res.json();
+    } catch {
+      throw Error("Game server unavailable. Check deployment and connection.");
+    }
+    if (!res.ok) throw Error(value.error || "Action failed");
+    if (value.serverNow) clockAnchor = { server: value.serverNow, mono: performance.now() };
+    return value;
+  } catch (e) {
+    if (controller.signal.aborted) throw Error("Connection timed out. Your table state is preserved; reconnect and retry.");
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+async function command(action) {
+  var _a, _b;
+  if (!room || busy) return;
+  if (!navigator.onLine) {
+    notice("Offline. Reconnect to continue.");
+    return;
+  }
+  busy = true;
+  root.querySelectorAll("button").forEach((b) => b.disabled = true);
+  render();
+  const body = { roomId: room.id, revision: room.revision, handId: (_a = room.hand) == null ? void 0 : _a.id, turnGeneration: (_b = room.hand) == null ? void 0 : _b.turnGeneration, commandId: crypto.randomUUID(), action };
+  try {
+    await api(body);
+  } catch (e) {
+    notice(e.message);
+  } finally {
+    busy = false;
+    render();
+  }
+}
+function header() {
+  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine ? "" : "offline"}">${!navigator.onLine ? "\u25CF RECONNECTING" : room && !connectionReady ? "\u25CB CONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
+}
+function home() {
+  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<input name="name" required maxlength="60" value="${esc(localStorage.getItem("kaliName") || "")}" autocomplete="nickname"></label><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${busy ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${busy ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your rooms & game history</h2>${memberships.length ? memberships.map((r) => r.status === "Removed" ? `<p>${esc(r.sessionName)} \xB7 Completed rounds remain in the main History.</p>` : btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">Your joined rooms appear here.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>${admin ? `<form id="register" class="panel"><h2>Register player</h2><label>Player name<input name="name" required maxlength="60"></label><button>Add to existing Players</button></form>` : ""}`;
+}
+function lobby() {
+  const me = room.members[uid()], isOwner = room.admin === uid(), seated = R.ordered(room), hasHand = R.active(room);
+  return `<section class="room-head ${hasHand ? "live" : ""}"><div><span class="eyebrow">${room.mode} PLAYERS \xB7 250 POINTS</span><h1>Table ${esc(room.code)}</h1><p>Clockwise seats \xB7 ${room.status === "stopped" ? "Session complete" : "Session stays open until admin stops it"}</p></div>${btn("\u2197 Invite", "share", false, "gold")}</section>${hasHand ? table() : `<div class="lobby-seats">${Array.from({ length: room.mode }, (_, i) => {
+    const p = seated.find((p2) => p2.seat === i + 1);
+    return `<article class="seat-card ${(p == null ? void 0 : p.uid) === uid() ? "self" : ""}"><span class="seat-number">SEAT ${i + 1}</span><div class="avatar">${(p == null ? void 0 : p.kind) === "bot" ? "\u265F" : esc(((p == null ? void 0 : p.name) || "?").slice(0, 1).toUpperCase())}</div><h3>${esc((p == null ? void 0 : p.name) || "Empty seat")}</h3><span class="badge">${p ? p.kind === "bot" ? "COMPUTER" : "HUMAN" : "OPEN"}</span><p>${p ? status(p) : "Ready for a player"}</p>${!p && isOwner && room.status !== "stopped" ? btn("+ Computer", "bot:" + (i + 1)) : ""}</article>`;
+  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : !hasHand ? `<section class="ready-bar"><p>${R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", !connectionReady || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : '<p class="muted">Waiting for admin approval and a seat.</p>'}</section>` : ""}<div class="toolbar">${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${room.paused ? `<section class="pause-banner"><h2>\u2161 Game paused</h2><p>${room.pauseReason === "disconnected" ? "A player disconnected. Cards and time remaining are preserved." : "Admin paused the table."}</p>${isOwner ? btn("Resume game", "resume") : ""}</section>` : ""}`;
+}
+function status(p) {
+  return !p.connected && p.kind !== "bot" ? "\u25CB Disconnected" : p.ready ? "\u2713 Ready" : esc(p.status);
+}
+function table() {
+  const h = room.hand, localCards = own.handId === h.id ? own.cards : [], me = room.members[uid()], mySeat = (me == null ? void 0 : me.seat) || 1, turn = h.turn === uid(), canPlay = connectionReady && navigator.onLine && turn && h.phase === "playing" && !room.paused && !busy && own.handId === h.id && own.cards.length === h.counts[uid()], legal = canPlay ? R.legal(localCards, h.trick) : [];
+  const last = h.tricks.at(-1), trick = h.trick.length ? h.trick : (last == null ? void 0 : last.cards) || [];
+  return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump ? R.NAMES[h.trump] : "Choosing"}</b></span><span>CONTRACT <b>${h.bid} \xB7 ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called ? esc(h.called.slice(0, -1)) + suit(h.called.slice(-1)) : "\u2014"}</b></span></section><div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} \xB7 TRICK ${Math.min(h.tricks.length + 1, h.mode === 4 ? 10 : 7)}</small></div>${h.seatMap.map((p) => {
+    const angle = (p.seat - mySeat + room.mode) % room.mode * 2 * Math.PI / room.mode, x = 50 - Math.sin(angle) * 40, y = 50 + Math.cos(angle) * 39;
+    return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn === p.uid ? "current" : ""} ${p.uid === uid() ? "self" : ""}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind === "bot" ? "\u265F" : esc(p.name.slice(0, 1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} \xB7 ${p.kind === "bot" ? "BOT \xB7 " : ""}${h.counts[p.uid]} cards</small><span>${room.members[p.uid].connected ? "" : "\u25CB Offline \xB7 "}${h.bidder === p.uid ? "\u265B Bidder" : h.direct === p.uid ? "Direct partner" : h.revealed && h.secret === p.uid ? "\u2726 Called partner" : ""}</span></div>`;
+  }).join("")}<div class="centre-trick ${!h.trick.length && last ? "collected" : ""}" data-trick="${h.tricks.length}">${trick.map((p) => `<div data-player="${esc(p.uid)}" class="played-card ${p.automatic ? "automatic" : ""}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason === "timeout" ? " \xB7 Timeout" : p.reason === "bot" ? " \xB7 Bot" : p.automatic ? " \xB7 Auto" : ""}</small></div>`).join("")}</div></div></div><section class="turn-bar"><span class="turn-label">${room.paused ? "Paused" : turn ? "Your turn" : esc(name(h.turn)) + "\u2019s turn"}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">\u2014</span></section>${h.revealed ? `<p class="reveal">\u2726 ${esc(name(h.secret))} holds ${esc(h.called)}${h.secret === h.direct ? " \xB7 No additional partner" : ""}</p>` : ""}<section class="my-hand" aria-label="Your cards"><div class="hand-fan">${localCards.map((c, i) => `<button class="hand-card ${legal.includes(c) ? "legal" : canPlay ? "dim" : "waiting"} ${selected === c ? "selected" : ""}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c) ? "disabled" : ""} aria-label="${esc(R.card(c).rank + " " + R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join("")}</div></section>${selected && canPlay ? `<div class="play-confirm">${btn("Play " + esc(selected), "confirm-card", false, "gold")}${btn("Cancel", "cancel-card")}</div>` : ""}${turn && connectionReady && !room.paused && own.handId === h.id ? phaseControls(h) : ""}<details class="panel auction"><summary>Bidding history \xB7 ${h.bid}</summary>${h.auction.map((a) => `<p>${esc(name(a.uid))} <b>${a.pass ? "PASS" : a.bid}</b> ${a.reason === "timeout" ? "\xB7 timeout PASS" : a.reason === "bot" ? "\xB7 computer" : a.automatic ? "\xB7 automatic" : ""}</p>`).join("")}<p>Passed: ${h.passed.map(name).map(esc).join(", ") || "None"}</p></details>`;
+}
+function phaseControls(h) {
+  if (h.phase === "auction") return `<form id="bid" class="action-bar"><label>Raise<select name="bid">${Array.from({ length: Math.max(0, (250 - h.bid) / 5) }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button class="gold" ${h.bid >= 250 || busy ? "disabled" : ""}>Raise</button>${btn("PASS", "pass")}</form>`;
+  if (h.phase === "trump") return `<section class="panel"><h2>Choose Hukum</h2><div class="suit-picker">${R.SUITS.map((s) => btn(suit(s) + " " + R.NAMES[s], "trump:" + s, false, ["H", "D"].includes(s) ? "red" : "")).join("")}</div></section>`;
+  if (h.phase === "partners") return `<form id="partners" class="panel"><h2>Choose your partner${room.mode === 6 ? "s" : ""}</h2>${room.mode === 6 ? `<label>Direct partner<select name="direct">${h.seatMap.filter((p) => p.uid !== uid()).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select></label>` : ""}<label>Call any card outside your hand<select name="called">${R.deck(room.mode, h.config).filter((c) => !own.cards.includes(c)).map((c) => `<option value="${c}">${c.slice(0, -1)}${suit(c.slice(-1))} \xB7 ${R.points(c)} points</option>`).join("")}</select></label><p class="muted">Holder stays secret until this card is played. It may be your direct partner.</p><button class="gold" ${busy ? "disabled" : ""}>Confirm partners</button></form>`;
+  return "";
+}
+function scoreboard() {
+  const rows = R.standings(room, room.status === "stopped");
+  if (!rows.length) return "<p>No completed hands. No winner was recorded.</p>";
+  return `<div class="score-list">${rows.map((p) => {
+    const m = Object.values(room.members).find((m2) => m2.playerId === p.id);
+    return `<div class="score-row"><span class="rank">${p.rank === 1 ? "\u265B" : p.rank}</span><span><b>${esc(p.name)}</b><small>${(m == null ? void 0 : m.kind) === "bot" ? "COMPUTER \xB7 session only" : "HUMAN"}${(m == null ? void 0 : m.seat) === null ? " \xB7 former/waiting" : ""}</small></span><strong class="${p.score < 0 ? "negative" : "positive"}">${sign(p.score)}</strong></div>`;
+  }).join("")}</div>`;
+}
+function results() {
+  const r = room.lastResult;
+  return `<section class="panel result"><span class="eyebrow">HAND COMPLETE \xB7 ${suit(r.trump)} HUKUM</span><h2 class="${r.result === "win" ? "positive" : "negative"}">Contract ${r.result === "win" ? "won" : "lost"}</h2><p>${esc(name(r.bidder))} bid <b>${r.bid}</b> \xB7 Team captured <b>${r.teamPoints}</b> / 250 \xB7 Opponents <b>${250 - r.teamPoints}</b></p><p>Partners: ${r.partners.map(name).map(esc).join(", ")}</p><div class="result-grid">${r.seatMap.map((p) => `<div><b>${esc(p.name)}</b><small>${r.captured[p.uid]} captured</small><strong class="${r.scoreChanges[p.playerId] < 0 ? "negative" : "positive"}">${sign(r.scoreChanges[p.playerId])}</strong></div>`).join("")}</div></section>`;
+}
+function history() {
+  return `<section class="panel"><h2>Completed & voided hands</h2>${records.map((r) => `<details><summary>${esc(r.handId)} \xB7 ${r.void ? "Voided" : r.result === "win" ? "Contract won" : "Contract lost"}</summary>${r.void ? "No scores awarded" : `<p>Bid ${r.bid} \xB7 Captured ${r.teamPoints} \xB7 ${suit(r.trump)}</p>${r.seatMap.map((p) => `<p>${esc(p.name)}: ${sign(r.scoreChanges[p.playerId])}</p>`).join("")}`}</details>`).join("") || "<p>No completed hands yet.</p>"}${historyMore && records.length ? btn("Load older hands", "older-history") : ""}</section>`;
+}
+function management() {
+  const active = R.active(room), ps = Object.values(room.members).filter((p) => p.status !== "Removed");
+  return `<section class="panel management"><h2>Manage table</h2><p class="muted">${active ? "Seats stay locked until this hand completes or is voided." : "Seating changes reset readiness."}</p>${ps.map((p) => `<div class="manage-person"><b>${esc(p.name)}</b><span>${p.kind === "bot" ? "Computer" : status(p)} \xB7 ${p.seat ? "Seat " + p.seat : "Waiting"}</span>${!p.approved && !p.reservation && !active ? `<form class="approve" data-target="${esc(p.uid)}"><select name="playerId">${profiles.map((x) => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join("")}</select><button>Approve & link profile</button></form>` : ""}${!active && (p.approved || p.reservation) ? `<form class="assign" data-target="${esc(p.uid)}"><select name="seat">${Array.from({ length: room.mode }, (_, i) => `<option value="${i + 1}">Seat ${i + 1}</option>`).join("")}</select><button>Assign / Move</button></form>${p.uid !== room.admin ? btn("Waiting", "unseat:" + p.uid) + btn("Sit out", "sitout:" + p.uid) + btn("Remove", "remove:" + p.uid) : ""}` : ""}</div>`).join("")}${!active ? `<form id="swap"><h3>Swap seats</h3><select name="target">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><select name="other">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><button>Swap</button></form><form id="reserve"><h3>Reserve existing player</h3><select name="playerId">${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button>Reserve profile</button></form><label>Computer difficulty<select id="difficulty"><option value="normal">Normal</option><option value="easy">Easy</option></select></label>` : ""}${!active ? `<form id="deck-config"><h3>Next-hand deck settings</h3>${room.mode === 4 ? `<label>First six<select name="six1">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[0] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[1] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label>` : ""}<label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}" ${room.config.extraThree === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><button>Save deck & reset Ready</button></form>` : ""}<form id="register"><h3>Register a new human player</h3><input name="name" required maxlength="60" placeholder="Player name"><button>Add player profile</button></form><div class="toolbar">${active ? btn(room.paused ? "Resume" : "Pause", room.paused ? "resume" : "pause") + btn("Void interrupted hand", "void", false, "danger") : ""}${btn("Stop session", "stop", room.status === "stopped", "danger")}</div></section>`;
+}
+function render() {
+  if (renderFrame !== null) cancelAnimationFrame(renderFrame);
+  renderFrame = requestAnimationFrame(renderNow);
+}
+function renderNow() {
+  var _a, _b, _c, _d;
+  renderFrame = null;
+  root.dataset.revision = (_a = room == null ? void 0 : room.revision) != null ? _a : "";
+  const scroll = window.scrollY;
+  const drafts = Array.from(root.querySelectorAll("form")).map((f) => ({ id: f.id, target: f.dataset.target, values: Array.from(f.querySelectorAll("input,select")).map((i) => ({ name: i.name, value: i.value })) }));
+  const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_b = focus.form) == null ? void 0 : _b.id, start: focus.selectionStart } : null;
+  document.body.classList.toggle("reduced", reduced);
+  root.innerHTML = header() + `<main>${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main><footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`;
+  for (const draft of drafts) {
+    const form = Array.from(root.querySelectorAll("form")).find((f) => f.id === draft.id && f.dataset.target === draft.target);
+    if (form) for (const v of draft.values) {
+      const input = Array.from(form.elements).find((i) => i.name === v.name);
+      if (input && (!(input instanceof HTMLSelectElement) || Array.from(input.options).some((o) => o.value === v.value))) input.value = v.value;
+    }
+  }
+  if (focused) {
+    const f = document.getElementById(focused.form), i = f && Array.from(f.elements).find((i2) => i2.name === focused.name);
+    if (i) {
+      i.focus({ preventScroll: true });
+      try {
+        i.setSelectionRange(focused.start, focused.start);
+      } catch {
+      }
+    }
+  }
+  if (window.KALI_NATIVE_PENDING) root.querySelectorAll("button").forEach((b) => b.disabled = true);
+  window.scrollTo(0, scroll);
+  tick();
+  if (!reduced) for (const kind of motionQueue.splice(0)) {
+    if (kind === "deal" && !document.querySelector(".hand-card") && ((_c = room == null ? void 0 : room.hand) == null ? void 0 : _c.seatMap.some((p) => p.uid === uid()))) {
+      motionQueue.push("deal");
+      continue;
+    }
+    if (kind === "deal") document.querySelectorAll(".hand-card").forEach((c, i) => c.animate([{ transform: "translateY(-120px) scale(.6)", opacity: 0 }, { transform: "translateY(4px) scale(1)", opacity: 1 }], { duration: 350, delay: i * 45 }));
+    if (kind === "deal") {
+      const felt = document.querySelector(".felt");
+      if (felt) {
+        const centre = felt.getBoundingClientRect();
+        document.querySelectorAll(".table-seat").forEach((seat, i) => {
+          const target = seat.getBoundingClientRect();
+          for (let c = 0; c < (room.mode === 4 ? 10 : 7); c++) {
+            const back = document.createElement("span");
+            back.className = "deal-back";
+            back.textContent = "\u2726";
+            felt.appendChild(back);
+            const travel = back.animate([{ transform: "translate(-50%,-50%)", opacity: 0.8 }, { transform: "translate(calc(-50% + " + (target.x + target.width / 2 - centre.x - centre.width / 2) + "px),calc(-50% + " + (target.y + target.height / 2 - centre.y - centre.height / 2) + "px)) scale(.6)", opacity: 0 }], { duration: 320, delay: (c * room.mode + i) * 20, fill: "both" });
+            if (travel.finished) travel.finished.then(() => back.remove(), () => back.remove());
+            else setTimeout(() => back.remove(), 350 + (c * room.mode + i) * 20);
+          }
+        });
+      }
+    }
+    if (kind === "card") {
+      const c = document.querySelector(".centre-trick .played-card:last-child");
+      const from = c && document.querySelector('.table-seat[data-player="' + CSS.escape(c.dataset.player) + '"]');
+      if (c && from) {
+        const a = from.getBoundingClientRect(), b = c.getBoundingClientRect();
+        c.animate([{ transform: "translate(" + (a.x + a.width / 2 - b.x - b.width / 2) + "px," + (a.y + a.height / 2 - b.y - b.height / 2) + "px) scale(.6)", opacity: 0.2 }, { transform: "translate(0,0) scale(1)", opacity: 1 }], { duration: 300, easing: "ease-out" });
+      }
+    }
+    if (kind === "trick") document.querySelectorAll(".centre-trick .played-card").forEach((c) => c.animate([{ filter: "brightness(1)" }, { filter: "brightness(1.4)", transform: "translateY(-5px)" }, { filter: "brightness(1)" }], { duration: 650 }));
+    if (kind === "trump" || kind === "reveal") (_d = document.querySelector(kind === "trump" ? ".game-meta" : ".reveal")) == null ? void 0 : _d.animate([{ opacity: 0.2, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }], { duration: 400 });
+  }
+  else motionQueue = [];
+}
+function tick() {
+  var _a, _b;
+  const el = document.getElementById("countdown");
+  if (!el || !(room == null ? void 0 : room.hand)) return;
+  const h = room.hand, seconds = h.deadline === null ? null : Math.max(0, Math.ceil((h.deadline - (clockAnchor.server + performance.now() - clockAnchor.mono)) / 1e3));
+  el.textContent = room.paused ? "\u2161" : ((_a = room.members[h.turn]) == null ? void 0 : _a.kind) === "bot" ? "\u2026" : seconds === null ? "\u2014" : seconds + "s";
+  el.classList.toggle("urgent", ((_b = room.members[h.turn]) == null ? void 0 : _b.kind) !== "bot" && seconds !== null && seconds <= 5);
+  el.style.setProperty("--time", Math.min(100, (seconds || 0) / 30 * 100) + "%");
+}
+setInterval(tick, 250);
+async function attachPresence(id) {
+  if (connection) {
+    await connection.remove().catch(() => {
+    });
+    connection = null;
+  }
+  const connected = presence.ref(".info/connected");
+  const cb = connected.on("value", async (s) => {
+    if (subscribedRoomId !== id) return;
+    connectionReady = false;
+    render();
+    if (!s.val() || !user) return;
+    try {
+      const ref = presence.ref("onlinePresence/" + id + "/" + uid() + "/connections").push();
+      await ref.onDisconnect().remove();
+      await ref.set(true);
+      connection = ref;
+      connectionReady = true;
+      render();
+    } catch (e) {
+      notice("Presence connection unavailable. Reopen your room to retry.");
+    }
+  });
+  unsubs.push(() => connected.off("value", cb));
+}
+async function enter(id) {
+  connectionReady = false;
+  loadingRoom = true;
+  room = null;
+  own = { cards: [] };
+  subscribedRoomId = id;
+  render();
+  unsubs.forEach((f) => f());
+  unsubs = [];
+  if (connection) {
+    await connection.remove().catch(() => {
+    });
+    connection = null;
+  }
+  screen = "room";
+  records = [];
+  historyMore = true;
+  previous = null;
+  selected = null;
+  scoreOpen = false;
+  unsubs.push(db.doc("onlineRooms/" + id).onSnapshot((s) => {
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    if (subscribedRoomId !== id) return;
+    if (!s.exists) {
+      loadingRoom = false;
+      error = "Room not found";
+      render();
+      return;
+    }
+    loadingRoom = false;
+    const next = s.data();
+    if (((_a = previous == null ? void 0 : previous.hand) == null ? void 0 : _a.id) !== ((_b = next.hand) == null ? void 0 : _b.id)) selected = null;
+    if (previous && previous.id === next.id) {
+      if (((_c = previous.hand) == null ? void 0 : _c.turnGeneration) !== ((_d = next.hand) == null ? void 0 : _d.turnGeneration)) selected = null;
+      if (((_e = previous.hand) == null ? void 0 : _e.id) !== ((_f = next.hand) == null ? void 0 : _f.id)) motionQueue.push("deal");
+      else if (((_g = next.hand) == null ? void 0 : _g.phase) === "playing" && Object.values(((_h = previous.hand) == null ? void 0 : _h.counts) || {}).reduce((a, b) => a + b, 0) > Object.values(next.hand.counts).reduce((a, b) => a + b, 0)) motionQueue.push(next.hand.tricks.length > previous.hand.tricks.length ? "trick" : "card");
+      if (!((_i = previous.hand) == null ? void 0 : _i.trump) && ((_j = next.hand) == null ? void 0 : _j.trump)) motionQueue.push("trump");
+      if (!((_k = previous.hand) == null ? void 0 : _k.revealed) && ((_l = next.hand) == null ? void 0 : _l.revealed)) motionQueue.push("reveal");
+    }
+    room = next;
+    previous = next;
+    render();
+  }, (e) => {
+    loadingRoom = false;
+    error = e.message;
+    render();
+  }));
+  unsubs.push(db.doc("onlineRooms/" + id + "/private/" + uid()).onSnapshot((s) => {
+    if (subscribedRoomId !== id) return;
+    own = s.exists ? s.data() : { cards: [] };
+    render();
+  }, (e) => notice(e.message)));
+  unsubs.push(db.collection("onlineRooms/" + id + "/hands").orderBy("handNumber", "desc").limit(25).onSnapshot((s) => {
+    if (subscribedRoomId !== id) return;
+    const combined = new Map(records.map((r) => [r.handId, r]));
+    for (const d of s.docs) combined.set(d.id, d.data());
+    records = [...combined.values()].sort((a, b) => b.handNumber - a.handNumber);
+    if (s.size < 25) historyMore = false;
+    if (historyOpen) render();
+  }));
+  await api({ operation: "presenceAccess", roomId: id });
+  await attachPresence(id);
+  localStorage.setItem("kaliRoom", id);
+}
+root.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (busy) return;
+  const f = e.target, v = Object.fromEntries(new FormData(f));
+  try {
+    if (f.id === "join") {
+      busy = true;
+      root.querySelectorAll("button").forEach((b) => b.disabled = true);
+      render();
+      if (!user) await auth.signInAnonymously();
+      localStorage.setItem("kaliName", v.name);
+      busy = true;
+      render();
+      const r = await api({ code: v.code, commandId: crypto.randomUUID(), action: { type: "join", name: v.name } });
+      await enter(r.roomId);
+    } else if (f.id === "login") await auth.signInWithEmailAndPassword(v.email, v.password);
+    else if (f.id === "create") {
+      busy = true;
+      render();
+      const r = await api({ operation: "create", playerId: v.playerId, mode: Number(v.mode), config: { sixSuits: [v.six1, v.six2], extraThree: v.extraThree } });
+      await enter(r.roomId);
+    } else if (f.id === "register") {
+      const r = await api({ operation: "register", name: v.name });
+      notice("Player registered: " + v.name);
+      await loadProfiles();
+    } else if (f.id === "bid") await command({ type: "bid", bid: Number(v.bid) });
+    else if (f.id === "partners") await command({ type: "partners", ...v });
+    else if (f.id === "swap") await command({ type: "swap", ...v });
+    else if (f.id === "deck-config") await command({ type: "config", config: { sixSuits: room.mode === 4 ? [v.six1, v.six2] : ["C", "D"], extraThree: v.extraThree } });
+    else if (f.id === "reserve") await command({ type: "reserve", playerId: v.playerId });
+    else if (f.classList.contains("approve")) await command({ type: "approve", target: f.dataset.target, playerId: v.playerId });
+    else if (f.classList.contains("assign")) await command({ type: "seat", target: f.dataset.target, seat: Number(v.seat) });
+  } catch (err) {
+    notice(err.message);
+  } finally {
+    busy = false;
+    render();
+  }
+});
+root.addEventListener("click", async (e) => {
+  var _a, _b;
+  const target = e.target.closest("[data-action]");
+  if (!target || target.disabled) return;
+  const [action, ...tail] = target.dataset.action.split(":"), arg = tail.join(":");
+  try {
+    if (action === "motion") {
+      reduced = !reduced;
+      localStorage.setItem("kaliReducedMotion", reduced);
+      render();
+    } else if (action === "room") await enter(arg);
+    else if (action === "home") {
+      subscribedRoomId = null;
+      room = null;
+      own = { cards: [] };
+      screen = "home";
+      unsubs.forEach((f) => f());
+      unsubs = [];
+      if (connection) await connection.remove().catch(() => {
+      });
+      connection = null;
+      connectionReady = false;
+      render();
+    } else if (action === "share") {
+      if (location.hostname === "appassets.androidplatform.net") {
+        location.href = "https://appassets.androidplatform.net/assets/kali/share?code=" + encodeURIComponent(room.code);
+        return;
+      }
+      const url = new URL(location.hostname === "appassets.androidplatform.net" ? KALI_PUBLIC_URL : "index.html", location.href);
+      url.hash = "join=" + room.code;
+      if (navigator.share) await navigator.share({ title: "3 Patti PRO \xB7 Join my table", text: "Room " + room.code, url: url.href });
+      else if ((_a = navigator.clipboard) == null ? void 0 : _a.writeText) {
+        await navigator.clipboard.writeText(url.href);
+        notice("Invite copied");
+      } else prompt("Copy this room invitation:", url.href);
+    } else if (action === "card") {
+      selected = arg;
+      render();
+    } else if (action === "cancel-card") {
+      selected = null;
+      render();
+    } else if (action === "confirm-card") {
+      const c = selected;
+      selected = null;
+      await command({ type: "play", card: c });
+    } else if (action === "pass") await command({ type: "bid", pass: true });
+    else if (action === "trump") await command({ type: "trump", suit: arg });
+    else if (action === "bot") await command({ type: "bot", seat: Number(arg), difficulty: ((_b = document.getElementById("difficulty")) == null ? void 0 : _b.value) || "normal" });
+    else if (["unseat", "sitout", "remove"].includes(action)) await command({ type: action, target: arg });
+    else if (action === "scores") {
+      scoreOpen = !scoreOpen;
+      render();
+    } else if (action === "older-history") {
+      const page = await db.collection("onlineRooms/" + room.id + "/hands").orderBy("handNumber", "desc").startAfter(records.at(-1).handNumber).limit(25).get();
+      records.push(...page.docs.map((d) => d.data()));
+      historyMore = page.size === 25;
+      render();
+    } else if (action === "history") {
+      historyOpen = !historyOpen;
+      render();
+    } else if (action === "manage") {
+      screen = screen === "manage" ? "room" : "manage";
+      render();
+    } else if (action === "void") {
+      if (confirm("Void this unfinished hand? No scores will be awarded.")) await command({ type: "void" });
+    } else if (action === "stop") {
+      if (R.active(room)) {
+        const answer = prompt("Type FINISH to complete this hand before stopping, or VOID to discard the unfinished hand.");
+        if ((answer == null ? void 0 : answer.toUpperCase()) === "FINISH") await command({ type: "stop", finish: true });
+        else if ((answer == null ? void 0 : answer.toUpperCase()) === "VOID") await command({ type: "stop", void: true });
+      } else if (confirm("Stop this session and save final standings?")) await command({ type: "stop" });
+    } else if (["ready", "pause", "resume", "leave"].includes(action)) await command({ type: action });
+  } catch (err) {
+    if (err.name !== "AbortError") notice(err.message);
+  }
+});
+async function loadProfiles() {
+  profiles = (await db.collection("players").get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+  render();
+}
+let membershipUnsub = null;
+auth.onAuthStateChanged(async (current) => {
+  if (user && user.uid !== (current == null ? void 0 : current.uid)) {
+    unsubs.forEach((f) => f());
+    unsubs = [];
+    room = null;
+    own = { cards: [] };
+    memberships = [];
+    subscribedRoomId = null;
+    loadingRoom = false;
+    if (connection) {
+      connection.remove().catch(() => {
+      });
+      connection = null;
+    }
+    presence.goOffline();
+    presence.goOnline();
+  }
+  user = current;
+  admin = false;
+  if (membershipUnsub) membershipUnsub();
+  try {
+    if (user) {
+      const token = await user.getIdTokenResult();
+      const role = await db.doc("admins/" + user.uid).get();
+      admin = token.claims.admin === true || role.exists;
+      membershipUnsub = db.collection("onlineMemberships/" + user.uid + "/rooms").onSnapshot((s) => {
+        memberships = s.docs.map((d) => d.data());
+        if (!room) render();
+      });
+    }
+    await loadProfiles();
+    if (user) await api({ operation: "clock" });
+  } catch (e) {
+    error = e.message;
+  }
+  render();
+});
+window.addEventListener("online", render);
+window.addEventListener("offline", render);
+window.kaliAcceptExchange = async (exchange) => {
+  try {
+    const result = await api({ exchange }, "kaliConsumeExchange");
+    await auth.signInWithCustomToken(result.token);
+    window.KALI_NATIVE_PENDING = false;
+    render();
+    return auth.currentUser.uid;
+  } catch (e) {
+    notice(e.message);
+    throw e;
+  }
+};
+render();
