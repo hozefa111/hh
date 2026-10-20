@@ -6,14 +6,15 @@ statistics. It does not create an independent lifetime leaderboard.
 
 ## Run and verify
 
-Use Node 22, Java 21 and Python 3. Install dependencies with `npm ci` and
+Use Node 22, Java 21, Firebase CLI 15.34.0 and Python 3. Functions v7
+requires a current emulator CLI; CLI 14 invokes removed runtime configuration APIs. Install dependencies with `npm ci` and
 `npm ci --prefix functions/online`, then `npm run build` and `npm test`.
 Install the browser with `npx playwright install chromium`.
 
 Start `python3 -m http.server 8765 --bind 127.0.0.1` in a separate terminal, then:
 
 ```
-npx firebase-tools@14.17.0 emulators:exec --project demo-three-patti \
+npx firebase-tools@15.34.0 emulators:exec --project demo-three-patti \
   --only auth,firestore,database,functions \
   'npm run test:rules && npm run test:browser'
 ```
