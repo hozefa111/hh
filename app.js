@@ -2131,6 +2131,7 @@ window.saveSessionName = async function(id) {
         if(session?.source==='online')await onlineSessionHistory(session,'rename',newName);
         else await db.collection('sessions').doc(id).update({ sessionName: newName });
         editingSessionId = null;
+        renderPastSessions();
         showToast('Session name updated');
         // renderPastSessions() is called via onSnapshot automatically
     } catch (err) {
