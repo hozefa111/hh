@@ -69,5 +69,11 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   assert(sawBot);assert(sawTimeout,'Real 30-second alarm played a legal card automatically');const room=await db.get('onlineState/'+roomId);assert.equal(room.completed,1);assert.equal(Object.values(room.hand.captured).reduce((a,b)=>a+b),250);
   assert((await db.get('rounds/online_'+room.hand.id)).timestamp instanceof Date);
   await send({type:'stop'});assert.equal((await db.get('sessions/'+roomId)).status,'stopped');
+  const preview=await api({operation:'sessionHistory',sessionId:roomId,action:'previewDelete',commandId:crypto.randomUUID()});assert.equal(preview.roundCount,1);
+  await api({operation:'sessionHistory',sessionId:roomId,action:'delete',deleteRounds:true,previewToken:preview.previewToken,commandId:crypto.randomUUID()});
+  // The client stops here: Durable Object alarms must finish the destructive job.
+  const until=Date.now()+20000;while(await db.get('sessions/'+roomId)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,300));
+  assert.equal(await db.get('sessions/'+roomId),null);assert.equal(await db.get('rounds/online_'+room.hand.id),null);assert.equal(await db.get('meta/sessionDeletionLock'),null);
+
  }finally{await miniflare.dispose();for(const path of created)await db.request('/'+path,'DELETE');}
 });

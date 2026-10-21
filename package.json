@@ -12,7 +12,8 @@
     "test:network": "node online/test/network.browser.cjs",
     "test:legacy-labels": "node online/test/legacy-labels.browser.cjs",
     "test:native-origin": "node online/test/native-origin.browser.cjs",
-    "test:table-feedback": "node online/test/table-feedback.browser.cjs"
+    "test:table-feedback": "node online/test/table-feedback.browser.cjs",
+    "test:session-deletion": "node online/test/session-deletion.browser.cjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.3",
