@@ -76,3 +76,8 @@ test('self-seating preserves scores, resets readiness and releases the old seat'
  await f.send('u',{type:'leave'});await f.send('v',{type:'join',playerId:'pv'});await f.send('v',{type:'claimSeat',seat:3});r=f.store.rooms.get(f.roomId);A.equal(r.members.u.seat,null);A.equal(r.members.v.seat,3);A.equal(r.totals.pu,0);A.equal(r.totals.pv,0);
  for(const seat of [0,5,2.5,'2'])await A.rejects(f.send('v',{type:'claimSeat',seat}),/Invalid seat/);
 });
+
+test('legacy invited member can confirm their saved profile without admin action',async()=>{
+ const f=await fixture();const r=f.store.rooms.get(f.roomId);r.members.old={uid:'old',name:'Saved',requestedPlayerId:'saved',playerId:null,kind:'human',seat:null,approved:false,ready:false,connected:true,status:'Invited'};
+ await f.send('old',{type:'join',playerId:'saved'});await f.send('old',{type:'claimSeat',seat:2});A.equal(f.store.rooms.get(f.roomId).members.old.playerId,'saved');A.equal(f.store.rooms.get(f.roomId).members.old.seat,2);
+});
