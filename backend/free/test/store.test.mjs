@@ -25,7 +25,7 @@ class RestMemory {
   this.calls.push({url,method:init.method});const body=init.body?JSON.parse(init.body):{},suffix=new URL(url).pathname.split('/documents')[1];
   if(suffix===':beginTransaction')return Response.json({transaction:'memory'});
   if(suffix===':rollback')return Response.json({});
-  if(suffix===':batchGet'){const name=body.documents[0],fields=this.docs.get(name.split('/documents/')[1]);return Response.json([fields?{found:{name,fields}}:{missing:name}]);}
+  if(suffix===':batchGet')return Response.json(body.documents.map(name=>{const fields=this.docs.get(name.split('/documents/')[1]);return fields?{found:{name,fields}}:{missing:name};}));
   if(suffix.endsWith(':runQuery')){const q=body.structuredQuery,col=suffix.slice(1,-9),prefix=(col?col+'/':'')+q.from[0].collectionId+'/',after=q.startAt?.values[0].referenceValue.split('/documents/')[1];const docs=[...this.docs.entries()].filter(([k])=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')&&(!after||k>after)).sort(([a],[b])=>a<b?-1:a>b?1:0).slice(0,q.limit).map(([k,fields])=>({document:{name:'projects/demo/databases/(default)/documents/'+k,fields}}));return Response.json(docs);}
   if(suffix===':commit'){
    for(const w of body.writes)if(w.currentDocument?.exists===false&&this.docs.has(w.update.name.split('/documents/')[1]))return Response.json({error:{status:'ALREADY_EXISTS'}},{status:409});
@@ -80,10 +80,12 @@ test('REST receipts reject command mutation; hidden partners do not enter public
  const own=f.memory.get('onlineRooms/'+f.roomId+'/private/admin');assert.equal(own.cards.length,7);
  f.memory.put('players/pwaiting',{name:'Waiting'});await f.send('waiting',{type:'join',playerId:'pwaiting'});const waiting=f.memory.get('onlineRooms/'+f.roomId+'/private/waiting');assert.deepEqual(waiting.cards,[]);
 });
-test('REST profile linking cannot steal a previously linked human identity',async()=>{
- const f=await fixture(4);f.memory.put('players/pb',{name:'B'});f.memory.put('onlineProfileLinks/pb',{uid:'someone-else',playerId:'pb'});
- await assert.rejects(f.send('b',{type:'join',playerId:'pb'}),/another identity/);
- assert.equal(f.rooms.get(f.roomId).members.b,undefined);
+test('a legacy global roster binding does not lock a new device out of a different room',async()=>{
+ const f=await fixture(4);f.memory.put('players/pb',{name:'B'});const old={uid:'old-device',playerId:'pb'};f.memory.put('onlineProfileLinks/pb',old);
+ await f.send('new-device',{type:'join',playerId:'pb'});await f.send('new-device',{type:'claimSeat',seat:2});
+ assert.equal(f.rooms.get(f.roomId).members['new-device'].seat,2);assert.deepEqual(f.memory.get('onlineProfileLinks/pb'),old);assert.equal(f.memory.get('players/pb').name,'B');
+ await assert.rejects(f.send('third-device',{type:'join',playerId:'pb'}),/already participating in this room/);
+ assert.equal(f.rooms.get(f.roomId).members['new-device'].uid,'new-device');assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/private/third-device'),null);
 });
 
 test('session deletion rejects older metadata-only clients before deleting any data',async()=>{const f=await fixture(4);await f.send('admin',{type:'stop'});await assert.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'delete',commandId:'old_client_123'}),/Update the app/);assert(f.memory.get('sessions/'+f.roomId));});
@@ -123,10 +125,18 @@ test('REST replacement is atomic, clears former private access and retains a sep
 
 for(const mode of [4,6])test(`${mode}-seat REST self-service join/seat links identity and protects private cards`,async()=>{
  const f=await fixture(mode);f.memory.put('players/pb',{name:'Human B'});await f.send('b',{type:'join',playerId:'pb'});
- assert.equal(f.memory.get('onlineProfileLinks/pb').uid,'b');assert.equal(f.rooms.get(f.roomId).members.b.approved,true);
+ assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/members/b').uid,'b');assert.equal(f.rooms.get(f.roomId).members.b.approved,true);
  await f.send('b',{type:'claimSeat',seat:2});assert.equal(f.memory.get('onlineRooms/'+f.roomId).members.b.seat,2);
  await f.send('b',{type:'ready'});for(let seat=3;seat<=mode;seat++)await f.send('admin',{type:'bot',seat});await f.send('b',{type:'ready'});await f.send('admin',{type:'ready'});
  const cards=f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards;assert.equal(cards.length,mode===4?10:7);
  f.memory.put('players/pw',{name:'Waiting'});await f.send('w',{type:'join',playerId:'pw'});assert.deepEqual(f.memory.get('onlineRooms/'+f.roomId+'/private/w').cards,[]);
  await assert.rejects(f.send('w',{type:'claimSeat',seat:2}),/locked/);assert.deepEqual(f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards,cards);
+});
+
+test('batch transaction reads preserve request order, missing documents and cascade versions',async()=>{
+ const db=new Firestore('demo',async()=>'fake',async(url,init)=>{const body=JSON.parse(init.body);assert.equal(body.documents.length,3);assert.equal(body.transaction,'transaction');return Response.json([{found:{name:body.documents[2],fields:encode({name:'Third'}).mapValue.fields,updateTime:'v3'}},{missing:body.documents[1]},{found:{name:body.documents[0],fields:encode({name:'First'}).mapValue.fields,updateTime:'v1'}}]);});
+ const rows=await db.getMany(['players/a','players/b','players/c'],'transaction');assert.deepEqual(rows,[{name:'First'},null,{name:'Third'}]);assert.equal(rows[0]._cascadeVersion,'v1');assert.equal(rows[2]._cascadeVersion,'v3');
+});
+test('a keyed move reads canonical state and its receipt in one atomic batch',async()=>{
+ const f=await fixture(4);const start=f.memory.calls.length;await f.send('admin',{type:'bot',seat:2});const reads=f.memory.calls.slice(start).filter(c=>c.url.endsWith(':batchGet'));assert.equal(reads.length,1);
 });

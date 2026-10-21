@@ -180,10 +180,58 @@ ran. An updated Android System WebView is required for the online module.
 ## Self-service seats (v2.7.7)
 
 Joining with an existing player profile now immediately links that authenticated
-identity, without admin approval. Existing profile-ownership links remain enforced.
+identity, without admin approval. Room participant ownership remains enforced; a shared scoring name is not a permanent Auth-account binding.
 The participant chooses **Take seat N** in the lobby. Seat claims are authoritative,
 atomic, limited to the caller, and only permitted between hands. Full tables and
 mid-hand arrivals wait; reconnecting restores the same seat and private cards.
 Every seating change resets readiness. Admin-only stop, swaps, removals, bot
 replacement and the final Ready action remain unchanged. Legacy approve commands
 remain supported for old clients and previously unlinked invitations.
+
+## Smooth controls (v2.7.8)
+
+Live rendering retains keyed controls, cards, the table and scroll containers
+instead of replacing the entire screen on each snapshot. Identical views skip
+DOM patching; render requests coalesce in one animation frame. Bid drafts retain
+focus on unrelated updates and reset on a new auction turn. Busy-state changes
+invalidate the cached view, including immediate API success or rejection.
+Countdown writes occur only on displayed changes and suspend while hidden.
+In-flight deal nodes and expanded history details survive live updates. Mobile
+sticky-header blur and card filters are removed; legal borders and animations
+remain. Tests cover retained nodes, focus/caret, scrolling, fast API completion,
+auction updates and active animations. CPU-throttled browser numbers are a
+repeatable synthetic benchmark, not physical-phone frame-rate certification.
+
+### In-app confirmations and backend request path
+
+Stop Session now offers **Finish hand & stop**, **Void hand & stop**, and
+**Keep playing** in an accessible in-app dialog; no typed FINISH/VOID or origin
+banner. Other online confirmations/name prompts use the same dialog. Android
+Back cancels the dialog before leaving the table. Waiting for a move ACK shows
+an explicit sending/sync message; scores are never updated optimistically.
+
+The free backend batches canonical-state/receipt reads in one transaction read.
+Tracker admin-role reads are limited to operations which require that global
+role; ordinary room actions still validate canonical room ownership/turns, and
+JWT/account revocation checks remain on every authenticated request. Bot alarms
+scan presence at a five-second cadence instead of every 900 ms; no stale presence
+snapshot is replayed between scans. Explicit presenceSync still reads the actual
+connection state, and disconnects still pause a hand. Rules/scoring/timers are
+unchanged. This reduces network round trips without weakening move validation.
+
+Server-alarm failure backoff is persisted and cannot be shortened by an overdue
+turn deadline or coordinator restart. A successful recovery clears it. Runtime
+tests inject a temporary presence-service failure, verify bounded retry rather
+than a tight loop, and reconnect/resume the exact paused hand.
+
+### Shared roster names on another device
+
+The old global `onlineProfileLinks` binding incorrectly treated a shared tracker
+profile as a permanently owned login. New room admission no longer consults or
+rewrites those legacy documents. Existing players, scores and historical records
+are retained. The room code allows a signed-in/anonymous participant to select an
+available roster profile, with no admin approval. This name selection is not proof
+of a person's real-world identity. Within a room, one active profile maps to one
+UID; duplicate enrolment, foreign-seat actions and private-card takeover remain
+rejected. Reconnect restores the same UID. A different UID needs the old
+participant removed at a permitted hand boundary rather than stealing that seat.

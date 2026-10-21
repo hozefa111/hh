@@ -19,11 +19,12 @@ export default {async fetch(request,env){
 }};
 export class KaliCoordinator extends DurableObject {
  constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.queue=Promise.resolve();
-  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});
+  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});this.lastPresenceScan=0;this.alarmRetryAfter=0;
   ctx.blockConcurrencyWhile(async()=>{
    const rooms=await this.storage.list({prefix:'room:'});
+   this.alarmRetryAfter=await this.storage.get('alarmRetryAfter')||0;
    for(const [key,r]of rooms)await this.storage.put(key,{id:r.id,recover:true});
-   if(rooms.size||(await this.storage.list({prefix:'delete:'})).size)await this.storage.setAlarm(Date.now()+100);
+   if(rooms.size||(await this.storage.list({prefix:'delete:'})).size)await this.storage.setAlarm(Math.max(Date.now()+100,this.alarmRetryAfter));
   });
  }
  serial(fn){const result=this.queue.then(fn);this.queue=result.catch(()=>{});return result;}
@@ -45,9 +46,9 @@ export class KaliCoordinator extends DurableObject {
    at=Math.min(at,Date.now()+(R.active(r)&&!r.paused?5000:30000));
    if(!r.paused&&R.active(r)&&r.hand.deadline!==null)at=Math.min(at,r.hand.deadline);
   }
-  if(Number.isFinite(at)){const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(Math.max(Date.now()+100,at));}
+  if(Number.isFinite(at)){at=Math.max(Date.now()+100,at,this.alarmRetryAfter);const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
  }
- async cleanupAlarm(at){const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
+ async cleanupAlarm(at){at=Math.max(at,this.alarmRetryAfter);const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
  async rate(key){const now=Date.now(),k='limit:'+key,old=await this.storage.get(k),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90)throw Error('Too many requests; try again shortly');await this.storage.put(k,{at:same?old.at:now,count});await this.cleanupAlarm(now+60000);}
  async fetch(request){return this.serial(async()=>{
   try{
@@ -59,7 +60,10 @@ export class KaliCoordinator extends DurableObject {
     await this.storage.delete(key);result={token:await this.identity.customToken(value.uid)};
    }else{
     const token=/^Bearer (.+)$/.exec(request.headers.get('Authorization')||'');if(!token)throw Error('Sign in required');
-    const who=await this.identity.verify(token[1]);await this.rate(who.uid);who.admin=who.admin||!!await this.db.get('admins/'+who.uid);
+    const who=await this.identity.verify(token[1]);await this.rate(who.uid);
+    // Room actions use canonical room ownership, not the global tracker role.
+    // Keep token revocation checks on every request; only avoid irrelevant reads.
+    if(['create','sessionHistory','register'].includes(body.operation))who.admin=who.admin||!!await this.db.get('admins/'+who.uid);
     if(body.operation==='create')result=await this.service.create(who,body);
     else if(body.operation==='sessionHistory')result=await this.service.history(who,body);
     else if(body.operation==='clock')result={serverNow:Date.now()};
@@ -88,17 +92,19 @@ export class KaliCoordinator extends DurableObject {
   const url=`https://${this.env.FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com${path}.json`,res=await fetch(url,{method,headers:{Authorization:'Bearer '+await this.identity.token(),'Content-Type':'application/json'},...(method==='GET'?{}:{body:JSON.stringify(value)}),signal:AbortSignal.timeout(10000)});
   if(!res.ok)throw Error('Presence sync unavailable');return res.json();
  }
- async alarm(){return this.serial(async()=>{
+ async alarm(){return this.serial(async()=>{let failed=false;
   try{
    for(const {id}of(await this.storage.list({prefix:'delete:'})).values())await this.store.deletion.step(id);
    const rooms=await this.storage.list({prefix:'room:'});
    // One server read serves every tracked room. No private card state enters RTDB.
-   const presence=rooms.size?await this.realtime('/onlinePresence'):null;
+   const scanPresence=rooms.size&&Date.now()-this.lastPresenceScan>=5000;
+   const presence=scanPresence?await this.realtime('/onlinePresence'):null;
+   if(scanPresence)this.lastPresenceScan=Date.now();
    for(const [key,cached]of rooms){
     let room=cached.recover?await this.db.get('onlineState/'+cached.id):cached;
     if(!room||room.status==='stopped'){await this.storage.delete(key);continue;}
     if(cached.recover)await this.storage.put(key,room);
-    for(const p of Object.values(room.members))if(p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
+    for(const p of Object.values(room.members))if(scanPresence&&p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
      const connected=Object.keys(presence?.[room.id]?.[p.uid]?.connections||{}).length>0;
      if(p.connected!==connected||connected&&p.status==='Disconnected')await this.service.presence(room.id,p.uid,connected);
      // Revoke access for former participants when room state changes, below.
@@ -108,8 +114,9 @@ export class KaliCoordinator extends DurableObject {
    }
    // Bound ephemeral authentication/rate records; session/score history is never expired.
    for(const prefix of ['exchange:','limit:'])for(const [key,v]of await this.storage.list({prefix}))if((v.expiresAt||v.at+60000)<Date.now())await this.storage.delete(key);
-  }catch(e){console.error('Kali alarm failed; retrying without inventing a move',e?.code||e?.name||'Error');await this.storage.setAlarm(Date.now()+5000);throw Error('Retry game alarm');}
-  finally{await this.arm();}
+   if(this.alarmRetryAfter){this.alarmRetryAfter=0;await this.storage.delete('alarmRetryAfter');}
+  }catch(e){failed=true;console.error('Kali alarm failed; retrying without inventing a move',e?.code||e?.name||'Error');this.alarmRetryAfter=Date.now()+5000;await this.storage.put('alarmRetryAfter',this.alarmRetryAfter);await this.storage.setAlarm(this.alarmRetryAfter);throw Error('Retry game alarm');}
+  finally{if(!failed)await this.arm();}
  });}
 }
 function publicError(e){if(e?.status||e?.name==='JWTExpired'||e?.code?.startsWith('ERR_'))return 'Server connection or sign-in unavailable; reconnect and retry';return String(e?.message||'Action failed').slice(0,180);}

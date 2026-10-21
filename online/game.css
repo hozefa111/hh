@@ -144,3 +144,23 @@ body.live-game.bidding{--phase-height:92px}
  .live-main .hand-fan{--hand-card-height:clamp(70px,10dvh,92px)}
  @media(max-height:550px) and (orientation:landscape){.live-main .hand-fan{--hand-card-height:clamp(60px,17dvh,76px)}}
 }
+
+/* Keep mobile scrolling and live controls on small, stable paint surfaces. */
+@media(max-width:650px),(pointer:coarse){header{background:#091411;backdrop-filter:none;-webkit-backdrop-filter:none}}
+.hand-card.legal{filter:none}.hand-card.legal .face{box-shadow:0 0 0 1px #c7edb0,0 3px 8px #0004}
+.hand-card.dim{filter:none}.hand-card{transition:transform .16s}
+@keyframes turnPulse{50%{transform:scale(1.05);opacity:.8}}
+@media(hover:none){button:hover:not(:disabled),.live-main .hand-card.legal:hover{transform:none}}
+.drawer-body{-webkit-overflow-scrolling:touch;touch-action:pan-y}
+
+.game-dialog-layer{position:fixed;inset:0;z-index:60;background:#000b;display:flex;align-items:center;justify-content:center;padding:18px;touch-action:pan-y}
+.game-dialog{width:100%;max-width:420px;max-height:calc(100vh - 36px);max-height:calc(100dvh - 36px);overflow:auto;background:linear-gradient(140deg,#19362b,#101f1b);border:1px solid #dac27b88;border-radius:20px;padding:22px;box-shadow:0 12px 32px #0006;-webkit-overflow-scrolling:touch}
+.game-dialog h2{margin:10px 0;font-size:24px}.game-dialog p{font-size:13px;color:#c9d7cc;line-height:1.5}
+.game-dialog input{width:100%;font-size:16px}.game-dialog-actions{display:grid;gap:10px;margin-top:20px}.game-dialog-actions button{text-align:left;white-space:normal;width:100%;min-height:48px;transform:none}.game-dialog-actions b{display:block;font-size:14px}.game-dialog-actions small{display:block;font-size:11px;line-height:1.4;margin-top:4px;color:inherit;opacity:.85}
+@media(max-height:450px){.game-dialog{padding:14px;max-width:560px}.game-dialog h2{font-size:19px;margin:5px 0}.game-dialog-actions{margin-top:10px;gap:6px}.game-dialog-actions button{padding:8px 12px}.game-dialog p{margin:6px 0}}
+
+/* Float decorative home cards without animating layout margins. */
+.hero-cards .face{--hero-tilt:0deg;--hero-x:0px;--hero-y:-12px}
+.hero-cards .face:first-child{--hero-tilt:-18deg;--hero-x:10px;--hero-y:0px}
+.hero-cards .face:last-child{--hero-tilt:18deg;--hero-x:-10px;--hero-y:0px}
+@keyframes heroFloat{0%,100%{transform:translateY(var(--hero-y)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}50%{transform:translateY(calc(var(--hero-y) - 8px)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}}

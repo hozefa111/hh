@@ -12,6 +12,7 @@ if (emulator) {
 const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : window.KALI_API_BASE || "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
 let subscribedRoomId = null, loadingRoom = false, connectionReady = false, presenceRecovery = null, reconnectBusy = false;
 let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
+let pendingSince = 0;
 let renderFrame = null, motionQueue = [], collectionUntil = 0, collectionTimer = null, pendingCollection = null;
 let reduced = localStorage.getItem("kaliReducedMotion") === "true" || matchMedia("(prefers-reduced-motion: reduce)").matches;
 let soundEnabled = localStorage.getItem("kaliSound") === "true", audioContext = null, lastSoundTurn = "", lastWarning = "";
@@ -65,6 +66,57 @@ function notice(s) {
   document.getElementById("notice").textContent = s;
   setTimeout(() => document.getElementById("notice").textContent = "", 6e3);
 }
+let activeDialog = null;
+function gameDialog({ title, message, choices, input = null }) {
+  if (activeDialog) activeDialog(null);
+  return new Promise((resolve) => {
+    const focused = document.activeElement, layer = document.createElement("div");
+    layer.className = "game-dialog-layer";
+    layer.innerHTML = `<section class="game-dialog" role="dialog" aria-modal="true" aria-labelledby="game-dialog-title" aria-describedby="game-dialog-description"><span class="eyebrow">\u2660 3 PATTI PRO</span><h2 id="game-dialog-title">${esc(title)}</h2><p id="game-dialog-description">${esc(message)}</p>${input ? `<label>${esc(input.label)}<input name="dialogValue" maxlength="${input.maxLength || 80}" value="${esc(input.value || "")}" ${input.readOnly ? "readonly" : ""}></label>` : ""}<div class="game-dialog-actions">${choices.map((c) => `<button type="button" data-choice="${esc(c.value)}" class="${c.style || ""}"><b>${esc(c.label)}</b>${c.description ? `<small>${esc(c.description)}</small>` : ""}</button>`).join("")}</div></section>`;
+    const close = (value) => {
+      if (activeDialog !== close) return;
+      activeDialog = null;
+      layer.remove();
+      root.removeAttribute("aria-hidden");
+      if (focused == null ? void 0 : focused.isConnected) focused.focus({ preventScroll: true });
+      resolve(value);
+    };
+    activeDialog = close;
+    layer.addEventListener("click", (e) => {
+      const button = e.target.closest("[data-choice]");
+      if (button) {
+        const value = button.dataset.choice;
+        close(value === "cancel" ? null : input && value === "confirm" ? layer.querySelector("input").value : value);
+      } else if (e.target === layer) close(null);
+    });
+    layer.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        close(null);
+      } else if (e.key === "Tab") {
+        const fields = Array.from(layer.querySelectorAll("input,button")), index = fields.indexOf(document.activeElement), next = (index + (e.shiftKey ? -1 : 1) + fields.length) % fields.length;
+        e.preventDefault();
+        fields[next].focus();
+      } else if (e.key === "Enter" && e.target.tagName === "INPUT" && !(input == null ? void 0 : input.readOnly)) {
+        e.preventDefault();
+        close(e.target.value);
+      }
+    });
+    document.body.appendChild(layer);
+    root.setAttribute("aria-hidden", "true");
+    const first = layer.querySelector("input") || layer.querySelector('[data-choice="cancel"]') || layer.querySelector("button");
+    first.focus({ preventScroll: true });
+  });
+}
+window.kaliDismissDialog = () => {
+  if (!activeDialog) return false;
+  activeDialog(null);
+  return true;
+};
+function askConfirm(title, message, label = "Confirm") {
+  return gameDialog({ title, message, choices: [{ value: "confirm", label, style: "danger" }, { value: "cancel", label: "Cancel" }] }).then((value) => value === "confirm");
+}
 async function api(body, endpoint = "kaliApi") {
   const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 25e3);
   try {
@@ -90,6 +142,10 @@ async function api(body, endpoint = "kaliApi") {
     clearTimeout(timeout);
   }
 }
+function disableControls() {
+  renderedMarkup = null;
+  root.querySelectorAll("button").forEach((b) => b.disabled = true);
+}
 async function command(action) {
   var _a, _b;
   if (!room || busy) return;
@@ -98,7 +154,8 @@ async function command(action) {
     return;
   }
   busy = true;
-  root.querySelectorAll("button").forEach((b) => b.disabled = true);
+  pendingSince = performance.now();
+  disableControls();
   render();
   const body = { roomId: room.id, revision: room.revision, handId: (_a = room.hand) == null ? void 0 : _a.id, turnGeneration: (_b = room.hand) == null ? void 0 : _b.turnGeneration, commandId: crypto.randomUUID(), action };
   try {
@@ -109,6 +166,7 @@ async function command(action) {
     return false;
   } finally {
     busy = false;
+    pendingSince = 0;
     render();
   }
 }
@@ -131,6 +189,7 @@ function pauseBanner() {
   return `<section class="pause-banner"><h2>\u2161 Game paused</h2><p>${missing.length ? "Waiting for " + missing.map((p) => esc(name(p.uid))).join(", ") + ". Their seats, cards and remaining time are preserved." : "Admin paused the table. Cards and remaining time are preserved."}</p><div class="pause-actions">${owner ? btn("Resume game", "resume", missing.length > 0) + (R.active(room) ? btn("Void hand & replace player", "void-replace", false, "danger") : "") : "<p>Reconnect to your existing seat. The admin resumes when everyone is connected.</p>"}</div>${owner && missing.length ? '<p class="muted">Wait for reconnection, or void this unfinished hand before choosing a replacement. Completed scores stay saved.</p>' : ""}</section>`;
 }
 function leaveRoomView() {
+  window.kaliDismissDialog();
   clearCollection();
   subscribedRoomId = null;
   room = null;
@@ -188,7 +247,7 @@ function header() {
 }
 function home() {
   const activeRooms = memberships.filter((r) => !["stopped", "Removed"].includes(r.status));
-  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${localStorage.getItem("kaliPlayerId") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><p class="muted">Choose your existing name. The admin will approve your entry.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${busy ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house \xB7 Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${busy ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your active rooms</h2><p class="muted">Completed sessions are in 3 Patti PRO \u2192 History \u2192 Sessions.</p>${activeRooms.length ? activeRooms.map((r) => btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">No active rooms. Create or join a table.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;
+  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${localStorage.getItem("kaliPlayerId") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><p class="muted">Choose your existing name, then take an empty seat. No admin approval needed.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${busy ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house \xB7 Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${busy ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your active rooms</h2><p class="muted">Completed sessions are in 3 Patti PRO \u2192 History \u2192 Sessions.</p>${activeRooms.length ? activeRooms.map((r) => btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">No active rooms. Create or join a table.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;
 }
 function liveRoom() {
   const owner = room.admin === uid(), panel = scoreOpen ? "scores" : historyOpen ? "history" : screen === "manage" ? "manage" : null;
@@ -211,7 +270,7 @@ function table() {
   return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump ? R.NAMES[h.trump] : "Choosing"}</b></span><span>${h.phase === "auction" ? "CURRENT BID" : "CONTRACT"} <b>${h.bid} \xB7 ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called ? esc(h.called.slice(0, -1)) + suit(h.called.slice(-1)) : "\u2014"}</b></span></section>${partnerStatus(h)}<div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} \xB7 TRICK ${Math.min(h.tricks.length + 1, h.mode === 4 ? 10 : 7)}</small></div>${h.seatMap.map((p) => {
     const angle = (p.seat - mySeat + room.mode) % room.mode * 2 * Math.PI / room.mode, x = 50 - Math.sin(angle) * 40, y = 50 + Math.cos(angle) * 39;
     return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn === p.uid ? "current" : ""} ${p.uid === uid() ? "self" : ""} ${(last == null ? void 0 : last.winner) === p.uid ? "trick-winner" : ""}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind === "bot" ? "\u265F" : esc(p.name.slice(0, 1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} \xB7 ${p.kind === "bot" ? "BOT \xB7 " : ""}${h.counts[p.uid]} cards \xB7 ${h.tricks.filter((t) => t.winner === p.uid).length} tricks</small><span>${room.members[p.uid].connected ? "" : "\u25CB Offline \xB7 "}${h.bidder === p.uid ? "\u265B Bidder" : h.direct === p.uid ? "Direct partner" : h.revealed && h.secret === p.uid ? "\u2726 Called partner" : ""}</span></div>`;
-  }).join("")}<div class="centre-trick" data-players="${room.mode}" data-trick="${h.tricks.length}">${trick.map((p) => `<div data-player="${esc(p.uid)}" class="played-card ${p.automatic ? "automatic" : ""}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason === "timeout" ? " \xB7 Timeout" : p.reason === "bot" ? " \xB7 Bot" : p.automatic ? " \xB7 Auto" : ""}</small></div>`).join("")}</div></div></div>${last ? `<p class="last-trick" role="status">\u2713 ${esc(name(last.winner))} won trick ${h.tricks.length} \xB7 +${last.points} captured points</p>` : ""}<section class="turn-bar"><span class="turn-label">${room.paused ? "Paused" : collecting ? "Collecting trick\u2026" : turn ? "Your turn" : esc(name(h.turn)) + "\u2019s turn"}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">\u2014</span></section><p class="hand-hint">Your cards \xB7 All visible \xB7 Glowing cards are playable</p><section class="my-hand" aria-label="Your cards"><div class="hand-fan" style="--hand-cols:${localCards.length > 8 ? 5 : localCards.length > 4 ? 4 : Math.max(1, localCards.length)}">${localCards.map((c, i) => `<button class="hand-card ${legal.includes(c) ? "legal" : canPlay ? "dim" : "waiting"} ${selected === c ? "selected" : ""}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c) ? "disabled" : ""} aria-label="${esc(R.card(c).rank + " " + R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join("")}</div></section><section class="phase-area">${selected && canPlay ? `<div class="play-confirm">${btn("Play " + esc(selected), "confirm-card", false, "gold")}${btn("Cancel", "cancel-card")}</div>` : ""}${turn && seatConnected() && !room.paused && own.handId === h.id ? phaseControls(h) : `<p class="phase-caption">${room.paused ? "Cards and time preserved" : !seatConnected() ? "Reconnecting to your seat\u2026" : h.phase === "auction" ? "Bidding clockwise \xB7 30s timeout = PASS" : h.phase === "trump" ? "Bidder is choosing Hukum" : h.phase === "partners" ? "Bidder is choosing partners" : "Follow the glowing cards when it is your turn"}</p>`}</section><details class="panel auction"><summary>Bidding history \xB7 ${h.bid}</summary>${h.auction.map((a) => `<p>${esc(name(a.uid))} <b>${a.pass ? "PASS" : a.bid}</b> ${a.reason === "timeout" ? "\xB7 timeout PASS" : a.reason === "bot" ? "\xB7 computer" : a.automatic ? "\xB7 automatic" : ""}</p>`).join("")}<p>Passed: ${h.passed.map(name).map(esc).join(", ") || "None"}</p></details>`;
+  }).join("")}<div class="centre-trick" data-players="${room.mode}" data-trick="${h.tricks.length}">${trick.map((p) => `<div data-player="${esc(p.uid)}" class="played-card ${p.automatic ? "automatic" : ""}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason === "timeout" ? " \xB7 Timeout" : p.reason === "bot" ? " \xB7 Bot" : p.automatic ? " \xB7 Auto" : ""}</small></div>`).join("")}</div></div></div>${last ? `<p class="last-trick" role="status">\u2713 ${esc(name(last.winner))} won trick ${h.tricks.length} \xB7 +${last.points} captured points</p>` : ""}<section class="turn-bar"><span class="turn-label">${room.paused ? "Paused" : collecting ? "Collecting trick\u2026" : turn ? "Your turn" : esc(name(h.turn)) + "\u2019s turn"}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">\u2014</span></section><p class="hand-hint" aria-live="polite">${busy ? "Sending your move\u2026" : "Your cards \xB7 All visible \xB7 Glowing cards are playable"}</p><section class="my-hand" aria-label="Your cards"><div class="hand-fan" style="--hand-cols:${localCards.length > 8 ? 5 : localCards.length > 4 ? 4 : Math.max(1, localCards.length)}">${localCards.map((c, i) => `<button class="hand-card ${legal.includes(c) ? "legal" : canPlay ? "dim" : "waiting"} ${selected === c ? "selected" : ""}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c) ? "disabled" : ""} aria-label="${esc(R.card(c).rank + " " + R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join("")}</div></section><section class="phase-area">${selected && canPlay ? `<div class="play-confirm">${btn("Play " + esc(selected), "confirm-card", false, "gold")}${btn("Cancel", "cancel-card")}</div>` : ""}${turn && seatConnected() && !room.paused && own.handId === h.id ? phaseControls(h) : `<p class="phase-caption">${room.paused ? "Cards and time preserved" : !seatConnected() ? "Reconnecting to your seat\u2026" : h.phase === "auction" ? "Bidding clockwise \xB7 30s timeout = PASS" : h.phase === "trump" ? "Bidder is choosing Hukum" : h.phase === "partners" ? "Bidder is choosing partners" : "Follow the glowing cards when it is your turn"}</p>`}</section><details class="panel auction"><summary>Bidding history \xB7 ${h.bid}</summary>${h.auction.map((a) => `<p>${esc(name(a.uid))} <b>${a.pass ? "PASS" : a.bid}</b> ${a.reason === "timeout" ? "\xB7 timeout PASS" : a.reason === "bot" ? "\xB7 computer" : a.automatic ? "\xB7 automatic" : ""}</p>`).join("")}<p>Passed: ${h.passed.map(name).map(esc).join(", ") || "None"}</p></details>`;
 }
 function partnerStatus(h) {
   if (!h.called) return "";
@@ -297,31 +356,90 @@ function updateBidControls() {
   const form = root.querySelector("#bid"), select = form == null ? void 0 : form.querySelector("select");
   if (!select) return;
   const value = Number(select.value), minimum = room.hand.bid + 5;
-  form.querySelector(".gold").textContent = "Bid " + value;
+  if (form.querySelector(".gold").textContent !== "Bid " + value) form.querySelector(".gold").textContent = "Bid " + value;
   form.querySelector(".gold").disabled = busy || !Number.isInteger(value) || value < minimum || value > 250 || value % 5 !== 0;
   form.querySelector("[data-action=bid-down]").disabled = busy || value <= minimum;
   form.querySelector("[data-action=bid-up]").disabled = busy || value >= 250;
   form.querySelector("[data-action=bid-max]").disabled = busy || value === 250;
   select.disabled = busy;
 }
+const renderSlots = /* @__PURE__ */ new Set(["room-head", "game-meta", "partner-status", "table-wrap", "felt", "table-mark", "centre-trick", "last-trick", "turn-bar", "hand-hint", "my-hand", "hand-fan", "phase-area", "live-tools", "table-drawer", "drawer-top", "drawer-body", "pause-banner", "connection-recovery", "drawer-scrim"]);
+function renderKey(node) {
+  if (node.nodeType !== 1) return null;
+  const tag = node.tagName;
+  if (node.id) return tag + "#" + node.id;
+  for (const field of ["data-action", "data-player", "data-target", "name"]) if (node.hasAttribute(field)) return tag + ":" + field + ":" + node.getAttribute(field);
+  for (const cls of node.classList) if (renderSlots.has(cls)) return tag + "." + cls;
+  return null;
+}
+function patchNode(node, next) {
+  if (node.nodeType !== 1) {
+    if (node.nodeValue !== next.nodeValue) node.nodeValue = next.nodeValue;
+    return;
+  }
+  if (node.id === "countdown") return;
+  for (const attr of Array.from(node.attributes)) if (!next.hasAttribute(attr.name) && !(node.tagName === "DETAILS" && attr.name === "open")) node.removeAttribute(attr.name);
+  for (const attr of Array.from(next.attributes)) if (node.getAttribute(attr.name) !== attr.value) node.setAttribute(attr.name, attr.value);
+  patchChildren(node, next);
+}
+function patchChildren(parent, next) {
+  var _a;
+  const old = Array.from(parent.childNodes).filter((n) => {
+    var _a2;
+    return !((_a2 = n.dataset) == null ? void 0 : _a2.transient);
+  }), used = /* @__PURE__ */ new Set(), keys = /* @__PURE__ */ new Map();
+  for (const n of old) {
+    const key = renderKey(n);
+    if (key) keys.set(key, n);
+  }
+  let cursor = parent.firstChild;
+  for (const wanted of Array.from(next.childNodes)) {
+    const key = renderKey(wanted);
+    const node = key ? keys.get(key) : old.find((n) => !used.has(n) && !renderKey(n) && n.nodeType === wanted.nodeType && (n.nodeType !== 1 || n.tagName === wanted.tagName));
+    const match = node && !used.has(node) && node.nodeType === wanted.nodeType && (node.nodeType !== 1 || node.tagName === wanted.tagName) ? node : null;
+    while ((_a = cursor == null ? void 0 : cursor.dataset) == null ? void 0 : _a.transient) cursor = cursor.nextSibling;
+    if (match) {
+      used.add(match);
+      if (match !== cursor) parent.insertBefore(match, cursor);
+      patchNode(match, wanted);
+      cursor = match.nextSibling;
+    } else {
+      const fresh = wanted.cloneNode(true);
+      parent.insertBefore(fresh, cursor);
+    }
+  }
+  for (const n of old) if (!used.has(n)) n.remove();
+}
+let renderedMarkup = null;
+function patchGame(markup) {
+  if (markup === renderedMarkup) return;
+  const template = document.createElement("template");
+  template.innerHTML = markup;
+  patchChildren(root, template.content);
+  renderedMarkup = markup;
+}
 function render() {
-  if (renderFrame !== null) cancelAnimationFrame(renderFrame);
-  renderFrame = requestAnimationFrame(renderNow);
+  if (renderFrame === null) renderFrame = requestAnimationFrame(renderNow);
 }
 function renderNow() {
-  var _a, _b, _c, _d, _e;
+  var _a, _b, _c, _d;
+  if (renderFrame !== null) cancelAnimationFrame(renderFrame);
   renderFrame = null;
   root.dataset.revision = (_a = room == null ? void 0 : room.revision) != null ? _a : "";
-  const scroll = window.scrollY, handScroll = ((_b = root.querySelector(".my-hand")) == null ? void 0 : _b.scrollLeft) || 0;
+  const scroll = window.scrollY;
   const drafts = Array.from(root.querySelectorAll("form")).map((f) => ({ id: f.id, target: f.dataset.target, context: f.id === "bid" ? f.dataset.hand + ":" + f.dataset.generation : null, values: Array.from(f.querySelectorAll("input,select")).map((i) => ({ name: i.name, value: i.value })) }));
-  const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_c = focus.form) == null ? void 0 : _c.id, start: focus.selectionStart } : null;
+  const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_b = focus.form) == null ? void 0 : _b.id, start: focus.selectionStart } : null;
   document.body.classList.toggle("reduced", reduced);
   const live = !!room && R.active(room);
   document.body.classList.toggle("live-game", live);
   document.body.classList.toggle("bidding", live && room.hand.phase === "auction");
-  root.innerHTML = header() + `<main class="${live ? "live-main" : ""}">${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? recoveryPanel() + lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main><footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`;
+  patchGame(header() + `<main class="${live ? "live-main" : ""}">${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? recoveryPanel() + lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main><footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`);
   for (const draft of drafts) {
     const form = Array.from(root.querySelectorAll("form")).find((f) => f.id === draft.id && f.dataset.target === draft.target && (draft.context === null || draft.context === f.dataset.hand + ":" + f.dataset.generation));
+    if (!form && draft.id === "bid") {
+      const fresh = document.getElementById("bid");
+      if (fresh) fresh.elements.bid.selectedIndex = 0;
+    }
     if (form) for (const v of draft.values) {
       const input = Array.from(form.elements).find((i) => i.name === v.name);
       if (input && (!(input instanceof HTMLSelectElement) || Array.from(input.options).some((o) => o.value === v.value))) input.value = v.value;
@@ -330,7 +448,7 @@ function renderNow() {
   updateBidControls();
   if (focused) {
     const f = document.getElementById(focused.form), i = f && Array.from(f.elements).find((i2) => i2.name === focused.name);
-    if (i) {
+    if (i && document.activeElement !== i) {
       i.focus({ preventScroll: true });
       try {
         i.setSelectionRange(focused.start, focused.start);
@@ -338,10 +456,8 @@ function renderNow() {
       }
     }
   }
-  if (window.KALI_NATIVE_PENDING) root.querySelectorAll("button").forEach((b) => b.disabled = true);
-  window.scrollTo(0, live ? 0 : scroll);
-  const hand = root.querySelector(".my-hand");
-  if (hand) hand.scrollLeft = handScroll;
+  if (window.KALI_NATIVE_PENDING) disableControls();
+  if (window.scrollY !== (live ? 0 : scroll)) window.scrollTo(0, live ? 0 : scroll);
   tick();
   animateCollection();
   if (!reduced) for (const kind of motionQueue.splice(0)) {
@@ -349,11 +465,11 @@ function renderNow() {
       motionQueue.push("card");
       continue;
     }
-    if (kind === "deal" && !document.querySelector(".hand-card") && ((_d = room == null ? void 0 : room.hand) == null ? void 0 : _d.seatMap.some((p) => p.uid === uid()))) {
+    if (kind === "deal" && !document.querySelector(".hand-card") && ((_c = room == null ? void 0 : room.hand) == null ? void 0 : _c.seatMap.some((p) => p.uid === uid()))) {
       motionQueue.push("deal");
       continue;
     }
-    if (kind === "deal") document.querySelectorAll(".hand-card").forEach((c, i) => c.animate([{ filter: "brightness(1.14)" }, { filter: "brightness(1)" }], { duration: 350, delay: i * 20 }));
+    if (kind === "deal") document.querySelectorAll(".hand-card").forEach((c, i) => c.animate([{ opacity: 0.88 }, { opacity: 1 }], { duration: 350, delay: i * 20 }));
     if (kind === "deal") {
       const felt = document.querySelector(".felt");
       if (felt) {
@@ -363,6 +479,7 @@ function renderNow() {
           for (let c = 0; c < (room.mode === 4 ? 10 : 7); c++) {
             const back = document.createElement("span");
             back.className = "deal-back";
+            back.dataset.transient = "true";
             back.textContent = "\u2726";
             felt.appendChild(back);
             const travel = back.animate([{ transform: "translate(-50%,-50%)", opacity: 0.8 }, { transform: "translate(calc(-50% + " + (target.x + target.width / 2 - centre.x - centre.width / 2) + "px),calc(-50% + " + (target.y + target.height / 2 - centre.y - centre.height / 2) + "px)) scale(.6)", opacity: 0 }], { duration: 320, delay: (c * room.mode + i) * 20, fill: "both" });
@@ -380,12 +497,17 @@ function renderNow() {
         c.animate([{ transform: "translate(" + (a.x + a.width / 2 - b.x - b.width / 2) + "px," + (a.y + a.height / 2 - b.y - b.height / 2) + "px) scale(.6)", opacity: 0.2 }, { transform: "translate(0,0) scale(1)", opacity: 1 }], { duration: 300, easing: "ease-out" });
       }
     }
-    if (kind === "trump" || kind === "reveal") (_e = document.querySelector(kind === "trump" ? ".game-meta" : ".partner-status")) == null ? void 0 : _e.animate([{ opacity: 0.2, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }], { duration: 400 });
+    if (kind === "trump" || kind === "reveal") (_d = document.querySelector(kind === "trump" ? ".game-meta" : ".partner-status")) == null ? void 0 : _d.animate([{ opacity: 0.2, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }], { duration: 400 });
   }
   else motionQueue = [];
 }
 function tick() {
   var _a, _b;
+  if (document.hidden) return;
+  if (busy && pendingSince) {
+    const hint = root.querySelector(".hand-hint"), label2 = performance.now() - pendingSince >= 3e3 ? "Waiting for server\u2026 Please do not submit again." : "Sending your move\u2026";
+    if (hint && hint.textContent !== label2) hint.textContent = label2;
+  }
   const el = document.getElementById("countdown");
   if (!el || !(room == null ? void 0 : room.hand)) return;
   const h = room.hand, key = h.id + ":" + h.turnGeneration;
@@ -398,9 +520,13 @@ function tick() {
     lastWarning = key + ":" + seconds;
     playSound("warning");
   }
-  el.textContent = room.paused ? "\u2161" : ((_a = room.members[h.turn]) == null ? void 0 : _a.kind) === "bot" ? "\u2026" : seconds === null ? "\u2014" : seconds + "s";
-  el.classList.toggle("urgent", ((_b = room.members[h.turn]) == null ? void 0 : _b.kind) !== "bot" && seconds !== null && seconds <= 5);
-  el.style.setProperty("--time", Math.min(100, (seconds || 0) / 30 * 100) + "%");
+  const label = room.paused ? "\u2161" : ((_a = room.members[h.turn]) == null ? void 0 : _a.kind) === "bot" ? "\u2026" : seconds === null ? "\u2014" : seconds + "s", urgent = ((_b = room.members[h.turn]) == null ? void 0 : _b.kind) !== "bot" && seconds !== null && seconds <= 5, time = Math.min(100, (seconds || 0) / 30 * 100) + "%", state = label + ":" + urgent + ":" + time;
+  if (el._clockState !== state) {
+    el._clockState = state;
+    if (el.textContent !== label) el.textContent = label;
+    el.classList.toggle("urgent", urgent);
+    el.style.setProperty("--time", time);
+  }
 }
 setInterval(tick, 250);
 async function attachPresence(id) {
@@ -625,6 +751,23 @@ async function enter(id) {
   await attachPresence(id);
   localStorage.setItem("kaliRoom", id);
 }
+function bidIntent(form) {
+  return form.dataset.hand + ":" + form.dataset.generation + ":" + form.dataset.baseBid + ":" + form.elements.bid.value;
+}
+root.addEventListener("pointerdown", (e) => {
+  const button = e.target.closest("#bid button.gold");
+  if (button && !button.disabled) button.form._bidIntent = bidIntent(button.form);
+}, { passive: true });
+root.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.closest("#bid")) {
+    const form = e.target.closest("#bid");
+    form._bidIntent = bidIntent(form);
+  }
+});
+root.addEventListener("pointercancel", () => {
+  const form = document.getElementById("bid");
+  if (form) delete form._bidIntent;
+}, { passive: true });
 root.addEventListener("submit", async (e) => {
   e.preventDefault();
   if (busy) return;
@@ -632,7 +775,7 @@ root.addEventListener("submit", async (e) => {
   try {
     if (f.id === "join") {
       busy = true;
-      root.querySelectorAll("button").forEach((b) => b.disabled = true);
+      disableControls();
       render();
       if (!user) await auth.signInAnonymously();
       localStorage.setItem("kaliPlayerId", v.playerId);
@@ -652,6 +795,13 @@ root.addEventListener("submit", async (e) => {
       await loadProfiles();
     } else if (f.id === "bid") {
       const h = room == null ? void 0 : room.hand, value = Number(v.bid);
+      const intent = f._bidIntent;
+      delete f._bidIntent;
+      if (intent && intent !== bidIntent(f)) {
+        notice("Bidding changed. Review the current bid before submitting.");
+        render();
+        return;
+      }
       if (!h || h.phase !== "auction" || h.turn !== uid() || f.dataset.hand !== h.id || Number(f.dataset.generation) !== h.turnGeneration || Number(f.dataset.baseBid) !== h.bid) {
         notice("Bidding changed. Review the current bid before submitting.");
         render();
@@ -680,7 +830,7 @@ root.addEventListener("change", (e) => {
   if (e.target.matches("#bid select")) updateBidControls();
 });
 root.addEventListener("click", async (e) => {
-  var _a, _b, _c;
+  var _a, _b, _c, _d, _e;
   const target = e.target.closest("[data-action]");
   if (!target || target.disabled) return;
   const [action, ...tail] = target.dataset.action.split(":"), arg = tail.join(":");
@@ -731,7 +881,7 @@ root.addEventListener("click", async (e) => {
       else if ((_a = navigator.clipboard) == null ? void 0 : _a.writeText) {
         await navigator.clipboard.writeText(url.href);
         notice("Invite copied");
-      } else prompt("Copy this room invitation:", url.href);
+      } else await gameDialog({ title: "Room invitation", message: "Copy this link to invite a player.", input: { label: "Invite link", value: url.href, readOnly: true, maxLength: 500 }, choices: [{ value: "cancel", label: "Close" }] });
     } else if (action === "card") {
       selected = arg;
       render();
@@ -774,7 +924,7 @@ root.addEventListener("click", async (e) => {
       historyOpen = false;
       render();
     } else if (action === "void-replace") {
-      if (confirm("Void this unfinished hand and choose a replacement? No points will be awarded for this hand. Completed hands and scores stay saved.")) {
+      if (await askConfirm("Void hand & replace player?", "No points will be awarded for this unfinished hand. Completed hands and scores stay saved.", "Void hand & choose replacement")) {
         if (await command({ type: "void" })) {
           screen = "manage";
           scoreOpen = false;
@@ -783,21 +933,29 @@ root.addEventListener("click", async (e) => {
         }
       }
     } else if (action === "replace-bot") {
-      if (confirm("Replace " + name(arg) + " with a computer for the next hand? Their previous scores stay saved. The computer starts with its own score.")) await command({ type: "replaceBot", target: arg, difficulty: ((_c = document.getElementById("difficulty")) == null ? void 0 : _c.value) || "normal" });
+      if (await askConfirm("Replace with computer?", "Replace " + name(arg) + " for the next hand. Their previous scores stay saved. The computer starts with its own score.", "Replace with computer")) await command({ type: "replaceBot", target: arg, difficulty: ((_c = document.getElementById("difficulty")) == null ? void 0 : _c.value) || "normal" });
     } else if (action === "void") {
-      if (confirm("Void this unfinished hand? No scores will be awarded.")) await command({ type: "void" });
+      if (await askConfirm("Void unfinished hand?", "No points from this unfinished hand will be awarded. Completed hands stay saved.", "Void hand")) await command({ type: "void" });
     } else if (action === "rename-session") {
-      const value = prompt("Session name:", room.sessionName || "Online \xB7 " + room.code);
+      const value = await gameDialog({ title: "Rename session", message: "Choose the name shown in your session history.", input: { label: "Session name", value: room.sessionName || "Online \xB7 " + room.code }, choices: [{ value: "confirm", label: "Save name", style: "gold" }, { value: "cancel", label: "Cancel" }] });
       if (value !== null) {
         await api({ operation: "sessionHistory", sessionId: room.id, action: "rename", name: value, expectedName: room.sessionName || "Online \xB7 " + room.code, commandId: crypto.randomUUID() });
         notice("Session name updated");
       }
     } else if (action === "stop") {
-      if (R.active(room)) {
-        const answer = prompt("Type FINISH to complete this hand before stopping, or VOID to discard the unfinished hand.");
-        if ((answer == null ? void 0 : answer.toUpperCase()) === "FINISH") await command({ type: "stop", finish: true });
-        else if ((answer == null ? void 0 : answer.toUpperCase()) === "VOID") await command({ type: "stop", void: true });
-      } else if (confirm("Stop this session and save final standings?")) await command({ type: "stop" });
+      const roomId = room.id, handId = (_d = room.hand) == null ? void 0 : _d.id;
+      const answer = await gameDialog({ title: "Stop session?", message: R.active(room) ? "Choose what happens to the unfinished hand. All completed hands and scores stay saved." : "Save final standings and close this session.", choices: R.active(room) ? [{ value: "finish", label: "Finish hand & stop", description: "Keep playing this hand, save its points, then end the session.", style: "gold" }, { value: "void", label: "Void hand & stop", description: "Discard only this unfinished hand. No points for this hand.", style: "danger" }, { value: "cancel", label: "Keep playing" }] : [{ value: "stop", label: "Stop session", style: "danger" }, { value: "cancel", label: "Keep playing" }] });
+      if (answer) {
+        if (!room || room.id !== roomId || ((_e = room.hand) == null ? void 0 : _e.id) !== handId) {
+          notice("The table changed. Review the current session before stopping.");
+          return;
+        }
+        if (room.status === "stopped") {
+          notice("Session already stopped.");
+          return;
+        }
+        await command({ type: "stop", ...answer === "finish" ? { finish: true } : answer === "void" ? { void: true } : {} });
+      }
     } else if (["ready", "pause", "resume"].includes(action)) await command({ type: action });
   } catch (err) {
     if (err.name !== "AbortError") notice(err.message);
