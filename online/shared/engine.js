@@ -108,12 +108,12 @@ function command(input,uid,action,now,random){const room=clone(input);assert(roo
  }else if(type==='leave'){
   member(room,uid);assert(uid!==room.admin,'Admin must stop session before leaving');if(active(room)&&p.seat!==null){p.connected=false;p.ready=false;p.status='Disconnected';pause(room,'disconnected',now);}else{p.seat=null;p.ready=false;p.status='Removed';resetReady(room);}
  }else if(type==='ready'){
-  member(room,uid);assert(!active(room)&&p.seat!==null&&p.approved&&connected(p),'Cannot Ready now');
+  member(room,uid);assert(!room.paused,'Session is paused');assert(!active(room)&&p.seat!==null&&p.approved&&connected(p),'Cannot Ready now');
   if(uid===room.admin){assert(allReadyExceptAdmin(room),'Other players must be Ready first');p.ready=true;startHand(room,now,random);}else{p.ready=true;p.status='Ready';}
- }else if(type==='pause'){owner(room,uid);pause(room,'admin',now);
+ }else if(type==='pause'){owner(room,uid);if(active(room))pause(room,'admin',now);else{room.paused=true;room.pauseReason='admin';}
  }else if(type==='resume'){
-  owner(room,uid);assert(active(room)&&room.paused,'Not paused');assert(room.hand.seatMap.every(x=>connected(room.members[x.uid])),'A player is disconnected');
-  room.paused=false;room.pauseReason=null;const h=room.hand,remaining=h.remaining;arm(room,now);if(remaining!==null)h.deadline=now+remaining;
+  owner(room,uid);assert(room.paused,'Not paused');if(active(room)){assert(room.hand.seatMap.every(x=>connected(room.members[x.uid])),'A player is disconnected');
+  room.paused=false;room.pauseReason=null;const h=room.hand,remaining=h.remaining;arm(room,now);if(remaining!==null)h.deadline=now+remaining;}else{room.paused=false;room.pauseReason=null;}
  }else if(type==='void'){
   owner(room,uid);assert(active(room),'No unfinished hand');room.hand.phase='void';room.hand.deadline=null;room.hand.turnGeneration++;room.status='between';room.paused=false;resetReady(room);event(room,'void',{handId:room.hand.id},now);
  }else if(type==='stop'){

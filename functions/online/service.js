@@ -48,7 +48,7 @@ class GameService{
   const next=R.command(room,p.uid,{...action,automatic:true,reason:p.kind==='bot'?'bot':'timeout'},now,this.random);return {next,result:{revision:next.revision}};
  });}
  async presence(roomId,uid,isConnected){return this.store.transact(roomId,null,null,room=>{
-  const p=room.members[uid];if(!p||p.status==='Removed'||p.kind==='bot'||p.connected===isConnected||room.status==='stopped')return {next:null,result:{ignored:true}};
+  const p=room.members[uid];if(!p||p.status==='Removed'||p.kind==='bot'||p.connected===isConnected&&(isConnected?p.status!=='Disconnected':p.status==='Disconnected')||room.status==='stopped')return {next:null,result:{ignored:true}};
   const next=R.command(room,uid,{type:'presence',connected:isConnected},this.clock(),this.random);return{next,result:{revision:next.revision}};
  });}
 }

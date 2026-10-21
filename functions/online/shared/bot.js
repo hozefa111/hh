@@ -5,7 +5,7 @@ function low(a,b){return R.points(a)-R.points(b)||R.strength(a)-R.strength(b)||R
 function sameTeam(room,uid,other){const h=room.hand;if(uid===other)return true;const known=[h.bidder,h.direct,...(h.partners||[])].filter(Boolean);if(known.includes(uid)&&known.includes(other))return true;return !!h.revealed&&!known.includes(uid)&&!known.includes(other);}
 function chooseCard(room,uid,cards){
  const h=room.hand,moves=R.legal(cards,h.trick).sort(low);if(moves.length===1)return moves[0];
- const played=new Set(h.tricks.flatMap(t=>t.cards.map(p=>p.card)));
+ const played=new Set([...h.tricks.flatMap(t=>t.cards.map(p=>p.card)),...h.trick.map(p=>p.card)]);
  const voids={};for(const t of h.tricks){const lead=t.cards[0]&&R.card(t.cards[0].card).suit;for(const p of t.cards)if(R.card(p.card).suit!==lead)(voids[p.uid]||(voids[p.uid]=new Set())).add(lead);}
  const selfSecret=cards.includes(h.called),known=[h.bidder,h.direct,...(h.partners||[]),...(selfSecret?[uid]:[])].filter(Boolean);
  const teammate=other=>sameTeam(room,uid,other)||(known.includes(uid)&&known.includes(other));
@@ -16,9 +16,19 @@ function chooseCard(room,uid,cards){
   return safe.sort((a,b)=>R.points(b)-R.points(a)||low(a,b))[0]||moves[0];
  }
  const current=R.trickWinner(h.trick,h.trump),last=h.trick.length===room.mode-1;
- if(teammate(current))return last?moves.slice().sort((a,b)=>R.points(b)-R.points(a)||low(a,b))[0]:moves[0];
- const winning=moves.filter(c=>R.trickWinner([...h.trick,{uid,card:c}],h.trump)===uid).sort(low),value=h.trick.reduce((n,p)=>n+R.points(p.card),0);
- return winning.length&&(value>=10||last&&value+R.points(winning[0])>=5)?winning[0]:moves[0];
+ // Only feed points to a partner when no unplayed opponent can beat this trick.
+ const start=h.seatMap.findIndex(p=>p.uid===uid),later=Array.from({length:room.mode-h.trick.length-1},(_,i)=>h.seatMap[(start+i+1)%room.mode]).filter(p=>!teammate(p.uid));
+ const unknown=R.deck(room.mode,h.config).filter(c=>!played.has(c)&&!cards.includes(c));
+ const partnerSafe=teammate(current)&&(last||!later.some(p=>unknown.some(c=>!(voids[p.uid]?.has(R.card(c).suit))&&R.trickWinner([...h.trick,{uid:p.uid,card:c}],h.trump)===p.uid)));
+ if(partnerSafe)return moves.slice().sort((a,b)=>R.points(b)-R.points(a)||low(a,b))[0];
+
+ const winning=moves.filter(c=>R.trickWinner([...h.trick,{uid,card:c}],h.trump)===uid).sort(low);
+ const secure=winning.filter(card=>!later.some(p=>unknown.some(c=>!voids[p.uid]?.has(R.card(c).suit)&&R.trickWinner([...h.trick,{uid,card},{uid:p.uid,card:c}],h.trump)===p.uid)));
+ const take=secure[0]||winning[0];
+ // Take an available trick instead of discarding a winner for a low point threshold.
+ if(winning.length&&!teammate(current))return take;
+ if(winning.length&&teammate(current)&&!partnerSafe)return take;
+ return moves[0];
 }
 function decide(room,uid,cards,difficulty='normal'){
  const h=room.hand;if(h.phase==='auction'){

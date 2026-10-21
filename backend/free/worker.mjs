@@ -100,7 +100,7 @@ export class KaliCoordinator extends DurableObject {
     if(cached.recover)await this.storage.put(key,room);
     for(const p of Object.values(room.members))if(p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
      const connected=Object.keys(presence?.[room.id]?.[p.uid]?.connections||{}).length>0;
-     if(p.connected!==connected)await this.service.presence(room.id,p.uid,connected);
+     if(p.connected!==connected||connected&&p.status==='Disconnected')await this.service.presence(room.id,p.uid,connected);
      // Revoke access for former participants when room state changes, below.
     }
     room=await this.storage.get(key)||room;
