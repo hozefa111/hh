@@ -5,5 +5,15 @@ function sessionRecord(room,Timestamp={fromMillis:ms=>new Date(ms)}){const board
  const bestHukum=hukum?{name:room.scoreNames[hukum[0]],winRate:Math.round(hukum[1].hukumWins/hukum[1].asHukum*100),wins:hukum[1].hukumWins,total:hukum[1].asHukum}:null;
  const entries=Object.entries(stats).filter(([,s])=>s.roundsPlayed>0),maxIds=field=>{const highest=Math.max(0,...entries.map(([,s])=>s[field]||0));return highest>0?entries.filter(([,s])=>s[field]===highest).map(([id])=>id):[];};
  const badges={hukumKing:maxIds('asHukum'),unlucky:maxIds('losses'),hotStreak:entries.filter(([,s])=>(s.positiveBest||0)>=3).map(([id])=>id),sharpPartner:entries.filter(([,s])=>s.asPartner>=3&&s.partnerWins/s.asPartner>=.8).map(([id])=>id),mvp:board.filter(p=>p.rank===1).map(p=>p.id),riskTaker:room.riskTakers||[]};
- return {source:'online',roomId:room.id,mode:room.mode,sessionName:'Online · '+room.code,startTime:Timestamp.fromMillis(room.startedAt||room.createdAt),endTime:room.endedAt?Timestamp.fromMillis(room.endedAt):null,totalRounds:room.completed,leaderboard:board.map(p=>({...p,playerId:p.id,total:p.score,roundsPlayed:stats[p.id]?.roundsPlayed||0})),mvp:board.length?{name:board.filter(p=>p.rank===1).map(p=>p.name).join(' & '),score:board[0].score}:null,bestHukum,biggestWin:room.biggestWin||{name:'-',score:0},biggestLoss:room.biggestLoss||{name:'-',score:0},streaks:entries.filter(([,s])=>s.currentStreak>=2).map(([id,s])=>({name:room.scoreNames[id],streak:s.currentStreak})).sort((a,b)=>b.streak-a.streak),badges,duration:((room.endedAt||Date.now())-(room.startedAt||room.createdAt)),status:room.status};}
-module.exports={sessionRecord};
+ return {source:'online',roomId:room.id,mode:room.mode,sessionName:room.sessionName||'Online · '+room.code,startTime:Timestamp.fromMillis(room.startedAt||room.createdAt),endTime:room.endedAt?Timestamp.fromMillis(room.endedAt):null,totalRounds:room.completed,leaderboard:board.map(p=>({...p,playerId:p.id,total:p.score,roundsPlayed:stats[p.id]?.roundsPlayed||0})),mvp:board.length?{name:board.filter(p=>p.rank===1).map(p=>p.name).join(' & '),score:board[0].score}:null,bestHukum,biggestWin:room.biggestWin||{name:'-',score:0},biggestLoss:room.biggestLoss||{name:'-',score:0},streaks:entries.filter(([,s])=>s.currentStreak>=2).map(([id,s])=>({name:room.scoreNames[id],streak:s.currentStreak})).sort((a,b)=>b.streak-a.streak),badges,duration:((room.endedAt||Date.now())-(room.startedAt||room.createdAt)),status:room.status};}
+// Metadata deletion mirrors manual sessions: scored rounds and lifetime totals survive.
+function historyChange(room,session,request){
+ if(room?.historyDeleted)throw new Error('Session was already deleted');
+ if(!room&&(!session||session.source!=='online'))throw new Error('Online session not found');
+ const oldName=room?(room.sessionName||'Online · '+room.code):session.sessionName;
+ if(request.expectedName!==null&&request.expectedName!==oldName)throw new Error('Session name changed. Refresh and retry.');
+ if(request.action==='delete'&&(room?room.status!=='stopped':!session.endTime))throw new Error('Stop the online session before deleting its history');
+ const next=room?{...room,revision:room.revision+1,...(request.action==='delete'?{historyDeleted:true}:{sessionName:request.name})}:null;
+ return {next,result:{ok:true}};
+}
+module.exports={sessionRecord,historyChange};

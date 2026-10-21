@@ -7,3 +7,6 @@
 .native-login{display:block;color:#ffe095;border:1px solid #ffe09555;border-radius:14px;padding:15px;text-decoration:none;font-weight:700}
 
 .timer{background-color:var(--gold)}
+
+/* Room actions stay outside management and remain reachable on phones. */
+.room-actions{display:flex;flex-wrap:wrap;gap:8px}.room-head h1{overflow-wrap:anywhere}.room-code{font-variant-numeric:tabular-nums;letter-spacing:.08em}

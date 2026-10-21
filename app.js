@@ -2052,7 +2052,7 @@ function renderPastSessions() {
         } else {
             headerHTML = `<div class="session-history-header" style="justify-content:space-between; align-items:flex-start; margin-bottom:0.5rem;">
                 <div style="font-weight:700; color:var(--gold-primary); font-size:1.05rem;">${sanitizeHTML(nameFallback)}</div>
-                ${isAdminUser && session.source !== 'online' ? `<div style="display:flex; gap:0.5rem;">
+                ${isAdminUser ? `<div style="display:flex; gap:0.5rem;">
                     <button class="icon-btn admin-only text-muted" onclick="event.stopPropagation(); editSessionName('${session.id}')" title="Edit Session Name"><i class="fa-solid fa-pencil"></i></button>
                     <button class="icon-btn admin-only" onclick="event.stopPropagation(); deleteSession('${session.id}')" style="color:var(--danger);" title="Delete Session"><i class="fa-solid fa-trash-can"></i></button>
                 </div>` : ''}
@@ -2108,34 +2108,47 @@ window.cancelEditSession = function() {
     renderPastSessions();
 };
 
+async function onlineSessionHistory(session,action,name) {
+    const endpoint=trackerEmulator?'http://'+location.hostname+':5001/demo-three-patti/asia-south1/':window.KALI_API_BASE;
+    if(!endpoint||!auth.currentUser)throw new Error('Sign in and reconnect before changing this session');
+    const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
+    try {
+        const token=await auth.currentUser.getIdToken();
+        const response=await fetch(endpoint+'kaliApi',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({operation:'sessionHistory',sessionId:session.id,action,name,expectedName:session.sessionName??null,commandId:crypto.randomUUID()}),signal:controller.signal});
+        const result=await response.json();if(!response.ok)throw new Error(result.error||'Session update failed');
+    } finally {clearTimeout(timer);}
+}
 window.saveSessionName = async function(id) {
     const input = document.getElementById(`edit-session-name-${id}`);
     if (!input) return;
     const newName = input.value.trim();
-    if (!newName) {
-        showToast('Name cannot be empty');
+    if (!newName || newName.length>80) {
+        showToast('Session name must be 1–80 characters');
         return;
     }
     try {
-        await db.collection('sessions').doc(id).update({ sessionName: newName });
+        const session=sessions.find(s=>s.id===id);
+        if(session?.source==='online')await onlineSessionHistory(session,'rename',newName);
+        else await db.collection('sessions').doc(id).update({ sessionName: newName });
         editingSessionId = null;
         showToast('Session name updated');
         // renderPastSessions() is called via onSnapshot automatically
     } catch (err) {
         console.error('Error updating session name:', err);
-        showToast('Failed to update name \u26A0\uFE0F');
+        showToast(err.message||'Failed to update name');
     }
 };
 
 window.deleteSession = function(id) {
-    if (sessions.find(s => s.id === id)?.source === 'online') { showToast('Online session history is managed by its room.'); return; }
-    showConfirm('Delete this session? This cannot be undone.', 'Delete', async () => {
+    const session=sessions.find(s=>s.id===id);
+    showConfirm('Delete this session summary? Saved rounds and lifetime scores will stay. This cannot be undone.', 'Delete', async () => {
         try {
-            await db.collection('sessions').doc(id).delete();
+            if(session?.source==='online')await onlineSessionHistory(session,'delete');
+            else await db.collection('sessions').doc(id).delete();
             showToast('Session deleted');
         } catch (err) {
             console.error('Error deleting session:', err);
-            showToast('Failed to delete session');
+            showToast(err.message||'Failed to delete session');
         }
     });
 };
@@ -2473,8 +2486,8 @@ window.savePlayerName = async function(pid) {
     const inp = document.getElementById(`edit-name-${pid}`);
     if (!inp) return;
     const newName = inp.value.trim();
-    if (!newName) {
-        showToast('Name cannot be empty');
+    if (!newName || newName.length>80) {
+        showToast('Session name must be 1–80 characters');
         return;
     }
 
