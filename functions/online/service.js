@@ -17,7 +17,7 @@ class GameService{
    if(input.playerId){const profile=await this.store.profile(input.playerId);if(!profile)throw new Error('Player profile not found');input.name=profile.name;}
   }
   if(input.type==='join'&&!input.playerId)throw new Error('Choose your name from the existing Players list');
-  if(input.type==='bot')input.botId='bot_'+this.id();
+  if(['bot','replaceBot'].includes(input.type))input.botId='bot_'+this.id();
   if(input.type==='reserve')input.reservationId='reserved_'+this.id();
   const key=uid+'_'+request.commandId, fingerprint=JSON.stringify({roomId,action:request.action,revision:request.revision,handId:request.handId,turnGeneration:request.turnGeneration});
   return this.store.transact(roomId,key,fingerprint,(room)=>{

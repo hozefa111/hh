@@ -37,7 +37,7 @@ body.live-game{height:100vh;height:100dvh;min-height:0;overflow:hidden}
 .live-game footer{display:none}
 main.live-main{flex:1;min-height:0;width:100%;max-width:1040px;overflow:hidden;padding:4px 8px;display:grid;gap:2px;
  grid-template-areas:'room' 'meta' 'partner' 'table' 'last' 'turn' 'hint' 'hand' 'controls' 'tools';
- grid-template-rows:24px 30px auto minmax(112px,1fr) 14px 30px 11px auto 58px 28px}
+ grid-template-rows:24px 30px auto minmax(112px,1fr) 14px 30px 11px auto var(--phase-height,58px) 28px}
 .live-main .room-head.live{grid-area:room;margin:0;padding:0;align-items:center;min-width:0;gap:8px}
 .live-main .room-head h1{font-size:12px;line-height:1.2;letter-spacing:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .live-main .room-actions{flex:none;gap:5px;flex-wrap:nowrap}
@@ -104,8 +104,8 @@ main.live-main{flex:1;min-height:0;width:100%;max-width:1040px;overflow:hidden;p
 .live-main .phase-area .action-bar>label{flex:1;min-width:0}.live-main .phase-area .action-bar>button{flex:1;width:auto;min-width:0}
 /* Bidding needs generous tap targets while the complete hand remains visible. */
 .live-main #bid label{font-size:0}.live-main #bid select,.live-main #bid button{height:44px;min-height:44px}
-@media(max-height:620px){main.live-main{grid-template-rows:22px 28px auto minmax(112px,1fr) 12px 28px 10px auto 58px 26px}}
-@media(max-height:550px) and (orientation:landscape){main.live-main{grid-template-rows:22px 28px 16px minmax(0,1fr) 0 58px 26px}}
+@media(max-height:620px){main.live-main{grid-template-rows:22px 28px auto minmax(112px,1fr) 12px 28px 10px auto var(--phase-height,58px) 26px}}
+@media(max-height:550px) and (orientation:landscape){main.live-main{grid-template-rows:22px 28px 16px minmax(0,1fr) 0 var(--phase-height,58px) 26px}}
 .connection-recovery{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 0 12px;padding:10px 12px;border:1px solid #e8bd6b88;border-radius:12px;background:#342b18;color:#ffe5a1;font-size:12px}
 .connection-recovery button{min-height:38px;padding:6px 10px;flex:none}
 .live-main>.connection-recovery{position:fixed;top:32px;left:8px;right:8px;z-index:22;max-width:680px;margin:0 auto;font-size:10px;padding:6px 10px}
@@ -115,3 +115,22 @@ main.live-main{flex:1;min-height:0;width:100%;max-width:1040px;overflow:hidden;p
 .live-main #bid{gap:4px}.live-main #bid>[data-action^="bid-"]{flex:0 0 48px;padding:0;font-size:21px}
 .live-main #bid>label{flex:1;min-width:48px}.live-main #bid>.gold{flex:1.5;white-space:nowrap;padding:3px}
 @media(max-width:420px){header{gap:3px;padding-left:8px;padding-right:8px}.brand{gap:3px;font-size:19px}.brand span{font-size:11px}.quiet{padding:4px;font-size:10px}.connection{font-size:8px;letter-spacing:0}}
+
+/* The amount is only a draft until its explicit Bid button is pressed. */
+body.live-game.bidding{--phase-height:92px}
+.live-main .bid-controls{display:flex;flex-direction:column;gap:3px;height:100%;margin:0}
+.live-main .bid-shortcuts{display:flex;justify-content:space-between;align-items:center;gap:8px;min-height:44px}
+.live-main .bid-shortcuts .bid-timeout-note{text-align:left;line-height:12px;flex:1}
+.live-main #bid .bid-shortcuts button{height:44px;min-height:44px;padding:4px 12px;flex:none;width:auto}
+.live-main #bid .action-bar{margin:0;display:flex;gap:4px;align-items:end}
+.live-main #bid .action-bar>label{flex:1;min-width:48px}
+.live-main #bid .action-bar>button{flex:1;min-width:0;width:auto}
+.live-main #bid .action-bar>[data-action^="bid-"]{flex:0 0 48px;padding:0;font-size:21px}
+.live-main #bid .action-bar>.gold{flex:1.5;white-space:nowrap;padding:3px}
+.live-main .max-bid-state{display:grid;grid-template-columns:1fr auto;grid-template-rows:auto auto auto;column-gap:10px;align-items:center;height:100%;font-size:12px}
+.live-main .max-bid-state>strong{color:var(--gold)}.live-main .max-bid-state>span{grid-column:1;font-size:11px}
+.live-main .max-bid-state>.bid-timeout-note{grid-column:1;text-align:left}
+.live-main .max-bid-state>button{grid-column:2;grid-row:1/4;min-height:44px;height:44px;min-width:70px}
+
+.pause-banner{max-height:calc(100vh - 60px);max-height:calc(100dvh - 60px);overflow:auto}
+.pause-actions{display:flex;gap:8px;flex-wrap:wrap}.pause-actions button{flex:1;min-width:0;font-size:12px;padding:10px}
