@@ -74,9 +74,10 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
  await send(owner,six.roomId,{type:'stop'});await tracker.waitForFunction(id=>sessions.some(s=>s.id===id&&s.endTime),six.roomId);
  await tracker.evaluate(id=>editSessionName(id),six.roomId);await tracker.locator('#edit-session-name-'+six.roomId).fill('Renamed from History');await tracker.locator('[onclick="saveSessionName(\''+six.roomId+'\')"]').click();await waitFor(async()=>(await db.doc('sessions/'+six.roomId).get()).data().sessionName==='Renamed from History','outer History rename');
  A.equal((await db.doc('onlineState/'+six.roomId).get()).data().sessionName,'Renamed from History');
+ const archive=await issue(owner,{operation:'create',playerId:'online_admin',mode:4,sessionName:'Delete summary fixture'});await send(owner,archive.roomId,{type:'stop'});await tracker.waitForFunction(id=>sessions.some(s=>s.id===id&&s.endTime),archive.roomId);
  const roundsBefore=(await db.collection('rounds').get()).docs.map(d=>({id:d.id,...d.data()}));
- await tracker.evaluate(async id=>{const session=sessions.find(s=>s.id===id);await onlineSessionHistory(session,'delete');},six.roomId);
- A(!(await db.doc('sessions/'+six.roomId).get()).exists);A.deepEqual((await db.collection('rounds').get()).docs.map(d=>({id:d.id,...d.data()})),roundsBefore);
+ await tracker.evaluate(async id=>{const session=sessions.find(s=>s.id===id);await onlineSessionHistory(session,'delete');},archive.roomId);
+ A(!(await db.doc('sessions/'+archive.roomId).get()).exists);A.deepEqual((await db.collection('rounds').get()).docs.map(d=>({id:d.id,...d.data()})),roundsBefore);
  report.checks.push('outer History online rename synchronizes room, and metadata deletion preserves every manual/online round');await tracker.close();
  A.equal(report.errors.length,0,JSON.stringify(report.errors));console.log(JSON.stringify(report,null,2));
  }catch(e){report.failure=e.stack;report.diagnostics=[];for(const context of browser.contexts())for(const page of context.pages()){try{report.diagnostics.push(await page.evaluate(()=>({url:location.pathname,revision:typeof room!=='undefined'?room?.revision:null,turn:typeof room!=='undefined'?room?.hand?.turn:null,busy:typeof busy!=='undefined'?busy:null,uiRevision:document.getElementById('game')?.dataset.revision,notice:document.getElementById('notice')?.textContent})));}catch{}}console.error(e);process.exitCode=1;}finally{fs.writeFileSync(artifacts+'/browser-report.json',JSON.stringify(report,null,2));await browser.close();}})();
