@@ -176,3 +176,14 @@ building. Android CI runs the existing native suite plus online smoke tests on
 API 30/35, including a real native-to-WebView Auth round trip against emulators.
 These are configured checks; consult actual CI results rather than assuming they
 ran. An updated Android System WebView is required for the online module.
+
+## Self-service seats (v2.7.7)
+
+Joining with an existing player profile now immediately links that authenticated
+identity, without admin approval. Existing profile-ownership links remain enforced.
+The participant chooses **Take seat N** in the lobby. Seat claims are authoritative,
+atomic, limited to the caller, and only permitted between hands. Full tables and
+mid-hand arrivals wait; reconnecting restores the same seat and private cards.
+Every seating change resets readiness. Admin-only stop, swaps, removals, bot
+replacement and the final Ready action remain unchanged. Legacy approve commands
+remain supported for old clients and previously unlinked invitations.

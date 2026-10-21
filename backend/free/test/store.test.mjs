@@ -82,8 +82,8 @@ test('REST receipts reject command mutation; hidden partners do not enter public
 });
 test('REST profile linking cannot steal a previously linked human identity',async()=>{
  const f=await fixture(4);f.memory.put('players/pb',{name:'B'});f.memory.put('onlineProfileLinks/pb',{uid:'someone-else',playerId:'pb'});
- await f.send('b',{type:'join',playerId:'pb'});await assert.rejects(f.send('admin',{type:'approve',target:'b',playerId:'pb'}),/another identity/);
- assert.equal(f.rooms.get(f.roomId).members.b.approved,false);
+ await assert.rejects(f.send('b',{type:'join',playerId:'pb'}),/another identity/);
+ assert.equal(f.rooms.get(f.roomId).members.b,undefined);
 });
 
 test('session deletion rejects older metadata-only clients before deleting any data',async()=>{const f=await fixture(4);await f.send('admin',{type:'stop'});await assert.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'delete',commandId:'old_client_123'}),/Update the app/);assert(f.memory.get('sessions/'+f.roomId));});
@@ -120,3 +120,13 @@ test('restored manual history requires a new preview and preserves the earlier r
 });
 
 test('REST replacement is atomic, clears former private access and retains a separate human score identity',async()=>{for(const mode of [4,6]){const f=await fixture(mode);f.memory.put('players/pb',{name:'Human B'});await f.send('guest',{type:'join',playerId:'pb'});await f.send('admin',{type:'approve',target:'guest',playerId:'pb'});await f.send('admin',{type:'seat',target:'guest',seat:2});for(let seat=3;seat<=mode;seat++)await f.send('admin',{type:'bot',seat});await f.send('guest',{type:'ready'});await f.send('admin',{type:'ready'});const active=f.rooms.get(f.roomId),oldHand=active.hand.id;assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/private/guest').cards.length,mode===4?10:7);await assert.rejects(f.send('admin',{type:'replaceBot',target:'guest'}),/Void or finish/);await f.service.presence(f.roomId,'guest',false);await f.send('admin',{type:'void'});const before=f.rooms.get(f.roomId);await f.send('admin',{type:'replaceBot',target:'guest',botId:'forged'});const after=f.rooms.get(f.roomId),bot=R.ordered(after).find(p=>p.seat===2);assert.equal(bot.kind,'bot');assert.notEqual(bot.uid,'forged');assert.equal(after.totals.pb,before.totals.pb);assert.equal(after.totals[bot.uid],0);assert.equal(after.defaultSeat,before.defaultSeat);assert.equal(after.completed,0);assert.equal(f.memory.get('rounds/online_'+oldHand),null);assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/private/guest'),null);assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/members/guest'),null);assert.equal(f.memory.get('onlineMemberships/guest/rooms/'+f.roomId).status,'Removed');assert.equal(f.memory.get('players/pb').name,'Human B');}});
+
+for(const mode of [4,6])test(`${mode}-seat REST self-service join/seat links identity and protects private cards`,async()=>{
+ const f=await fixture(mode);f.memory.put('players/pb',{name:'Human B'});await f.send('b',{type:'join',playerId:'pb'});
+ assert.equal(f.memory.get('onlineProfileLinks/pb').uid,'b');assert.equal(f.rooms.get(f.roomId).members.b.approved,true);
+ await f.send('b',{type:'claimSeat',seat:2});assert.equal(f.memory.get('onlineRooms/'+f.roomId).members.b.seat,2);
+ await f.send('b',{type:'ready'});for(let seat=3;seat<=mode;seat++)await f.send('admin',{type:'bot',seat});await f.send('b',{type:'ready'});await f.send('admin',{type:'ready'});
+ const cards=f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards;assert.equal(cards.length,mode===4?10:7);
+ f.memory.put('players/pw',{name:'Waiting'});await f.send('w',{type:'join',playerId:'pw'});assert.deepEqual(f.memory.get('onlineRooms/'+f.roomId+'/private/w').cards,[]);
+ await assert.rejects(f.send('w',{type:'claimSeat',seat:2}),/locked/);assert.deepEqual(f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards,cards);
+});

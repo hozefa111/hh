@@ -26,7 +26,7 @@ test('join requires existing profile; server resolves name and blocks duplicate 
  await A.rejects(f.send('u',{type:'join',name:'Invented'}),/existing Players/);
  await A.rejects(f.send('u',{type:'join',playerId:'missing'}),/not found/);
  await f.send('u',{type:'join',playerId:'pu',name:'Forged'});
- let p=f.store.rooms.get(f.roomId).members.u;A.equal(p.name,'pu');A.equal(p.playerId,null);A.equal(p.requestedPlayerId,'pu');A.equal(p.approved,false);
+ let p=f.store.rooms.get(f.roomId).members.u;A.equal(p.name,'pu');A.equal(p.playerId,'pu');A.equal(p.requestedPlayerId,'pu');A.equal(p.approved,true);A.equal(p.status,'Waiting');
  await A.rejects(f.send('v',{type:'join',playerId:'pu'}),/already participating/);
  await f.send('admin',{type:'approve',target:'u',playerId:'pu'});await f.send('admin',{type:'seat',target:'u',seat:2});
  await f.send('u',{type:'join',playerId:'pu'});A.equal(f.store.rooms.get(f.roomId).members.u.seat,2);
@@ -40,11 +40,10 @@ test('custom session name persists and history actions require admin and valid i
  await A.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'rename',name:' ',commandId:'history_123'}),/Session name/);
 });
 
-test('pending name correction and administrator relinking do not reserve a phantom player profile',async()=>{
- const f=await fixture();await f.send('u',{type:'join',playerId:'wrong'});await f.send('u',{type:'join',playerId:'correct'});
- A.equal(f.store.rooms.get(f.roomId).members.u.requestedPlayerId,'correct');A.equal(f.store.rooms.get(f.roomId).members.u.name,'correct');
- await f.send('admin',{type:'approve',target:'u',playerId:'approved'});await f.send('v',{type:'join',playerId:'correct'});
- A.equal(f.store.rooms.get(f.roomId).members.v.name,'correct');
+test('self-joined identity cannot silently switch its profile',async()=>{
+ const f=await fixture();await f.send('u',{type:'join',playerId:'chosen'});
+ await A.rejects(f.send('u',{type:'join',playerId:'different'}),/existing player profile/);
+ A.equal(f.store.rooms.get(f.roomId).members.u.playerId,'chosen');
 });
 
 test('human auction deadline is exactly 30 seconds and expires to one permanent automatic PASS',async()=>{const f=await fixture();for(let seat=2;seat<=4;seat++){const uid='human_'+seat;await f.send(uid,{type:'join',playerId:'profile_'+seat});await f.send('admin',{type:'approve',target:uid,playerId:'profile_'+seat});await f.send('admin',{type:'seat',target:uid,seat});}for(let seat=2;seat<=4;seat++)await f.send('human_'+seat,{type:'ready'});await f.send('admin',{type:'ready'});const before=f.store.rooms.get(f.roomId),h=before.hand;A.equal(h.turn,'human_2');A.equal(h.deadline,31000);f.time(h.deadline-1);A((await f.service.due(f.roomId,h.id,h.turnGeneration)).ignored);f.time(h.deadline);await f.service.due(f.roomId,h.id,h.turnGeneration);const next=f.store.rooms.get(f.roomId);A.equal(next.hand.turn,'human_3');A.deepEqual(next.hand.passed,['human_2']);A.equal(next.hand.auction.at(-1).pass,true);A.equal(next.hand.auction.at(-1).reason,'timeout');A.equal(next.hand.auction.at(-1).automatic,true);A((await f.service.due(f.roomId,h.id,h.turnGeneration)).ignored);await A.rejects(f.send('human_2',{type:'bid',bid:160}));});
@@ -54,3 +53,26 @@ test('presence acknowledgement repairs a stale Disconnected label even when conn
 test('concurrent fresh bid submissions accept one; equal/lower bids cannot change the auction or scores',async()=>{for(const mode of [4,6]){const f=await fixture(mode);for(let seat=2;seat<=mode;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});const r=f.store.rooms.get(f.roomId),h=r.hand;const responses=await Promise.allSettled(['bid_race_first','bid_race_second'].map(commandId=>f.service.execute({uid:h.turn},{roomId:f.roomId,revision:r.revision,handId:h.id,turnGeneration:h.turnGeneration,commandId,action:{type:'bid',bid:180}})));A.equal(responses.filter(r=>r.status==='fulfilled').length,1);const after=f.store.rooms.get(f.roomId);A.equal(after.hand.bid,180);A.equal(after.hand.auction.filter(a=>a.bid===180).length,1);for(const bid of [155,175,180,182,255]){await A.rejects(f.send(after.hand.turn,{type:'bid',bid}));A.deepEqual(f.store.rooms.get(f.roomId),after);}A.deepEqual(after.totals,r.totals);A.equal(f.store.rounds.size,0);}});
 
 test('bot replacement has a server-owned identity and concurrent replacements commit once',async()=>{const f=await fixture();await f.send('u',{type:'join',playerId:'pu'});await f.send('admin',{type:'approve',target:'u',playerId:'pu'});await f.send('admin',{type:'seat',target:'u',seat:2});const revision=f.store.rooms.get(f.roomId).revision;const results=await Promise.allSettled(['replace_first','replace_second'].map(commandId=>f.service.execute(f.who,{roomId:f.roomId,revision,commandId,action:{type:'replaceBot',target:'u',botId:'forged'}})));A.equal(results.filter(r=>r.status==='fulfilled').length,1);const r=f.store.rooms.get(f.roomId),bot=R.ordered(r).find(p=>p.seat===2);A.equal(bot.kind,'bot');A.notEqual(bot.uid,'forged');A.equal(r.totals.pu,0);A.equal(r.totals[bot.uid],0);A.equal(f.store.rounds.size,0);});
+
+for(const mode of [4,6])test(`${mode} seats: players join and claim their own seat without approval`,async()=>{
+ const f=await fixture(mode);
+ for(let seat=2;seat<=mode;seat++){const u='human_'+seat;await f.send(u,{type:'join',playerId:'p'+u});await f.send(u,{type:'claimSeat',seat});}
+ for(let seat=2;seat<=mode;seat++)await f.send('human_'+seat,{type:'ready'});
+ let r=f.store.rooms.get(f.roomId);A.equal(R.ordered(r).length,mode);A(R.allReadyExceptAdmin(r));
+ await A.rejects(f.send('human_2',{type:'stop'}),/admin/);
+ await A.rejects(f.send('human_2',{type:'claimSeat',seat:2,target:'admin'}),/own seat/);
+ await f.send('admin',{type:'ready'});r=f.store.rooms.get(f.roomId);const hands=JSON.stringify(r.hand.hands);
+ await f.send('waiting',{type:'join',playerId:'pwaiting'});await A.rejects(f.send('waiting',{type:'claimSeat',seat:2}),/locked/);
+ await f.send('human_2',{type:'join',playerId:'phuman_2'});r=f.store.rooms.get(f.roomId);A.equal(r.members.human_2.seat,2);A.equal(r.members.waiting.seat,null);A.deepEqual(R.privateState(r,'waiting').cards,[]);A.equal(JSON.stringify(r.hand.hands),hands);
+});
+test('two humans racing for one seat have exactly one winner without admin approval',async()=>{
+ const f=await fixture();for(const u of ['u','v'])await f.send(u,{type:'join',playerId:'p'+u});const revision=f.store.rooms.get(f.roomId).revision;
+ const outcomes=await Promise.allSettled(['u','v'].map(u=>f.send(u,{type:'claimSeat',seat:2},{revision})));
+ A.equal(outcomes.filter(r=>r.status==='fulfilled').length,1);const r=f.store.rooms.get(f.roomId);A.equal(R.ordered(r).filter(p=>p.seat===2).length,1);
+ const loser=outcomes[0].status==='rejected'?'u':'v';await A.rejects(f.send(loser,{type:'claimSeat',seat:2}),/occupied/);
+});
+test('self-seating preserves scores, resets readiness and releases the old seat',async()=>{
+ const f=await fixture();await f.send('u',{type:'join',playerId:'pu'});await f.send('u',{type:'claimSeat',seat:2});await f.send('u',{type:'ready'});await f.send('u',{type:'claimSeat',seat:3});let r=f.store.rooms.get(f.roomId);A.equal(r.members.u.ready,false);A.equal(r.members.u.seat,3);A.equal(r.totals.pu,0);
+ await f.send('u',{type:'leave'});await f.send('v',{type:'join',playerId:'pv'});await f.send('v',{type:'claimSeat',seat:3});r=f.store.rooms.get(f.roomId);A.equal(r.members.u.seat,null);A.equal(r.members.v.seat,3);A.equal(r.totals.pu,0);A.equal(r.totals.pv,0);
+ for(const seat of [0,5,2.5,'2'])await A.rejects(f.send('v',{type:'claimSeat',seat}),/Invalid seat/);
+});

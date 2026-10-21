@@ -226,31 +226,41 @@
     const type = action.type, p = room.members[uid];
     if (type === "join") {
       assert(typeof action.name === "string" && action.name.trim().length > 0 && action.name.length <= 60, "Invalid name");
-      if (p && p.status !== "Removed") {
-        if (!p.approved && action.playerId) {
-          p.requestedPlayerId = action.playerId;
-          p.name = action.name.trim();
-        }
+      if (p && p.status !== "Removed" && p.approved) {
         p.connected = true;
-        p.status = active(room) && p.seat !== null ? "Playing" : p.seat !== null ? p.ready ? "Ready" : "Seated" : p.sittingOut ? "Sitting Out" : p.approved ? "Waiting" : "Invited";
+        p.status = active(room) && p.seat !== null ? "Playing" : p.seat !== null ? p.ready ? "Ready" : "Seated" : p.sittingOut ? "Sitting Out" : "Waiting";
         room.revision++;
         return room;
       }
-      if (p && p.status === "Removed") {
-        p.name = action.name.trim();
-        p.requestedPlayerId = action.playerId || null;
-        p.playerId = null;
-        p.status = "Invited";
-        p.sittingOut = false;
-        p.approved = false;
-        p.ready = false;
-        p.connected = true;
-        p.seat = null;
-        room.revision++;
-        return room;
+      const profile = action.playerId || null;
+      assert(!profile || !Object.values(room.members).some((x) => x.uid !== uid && !x.reservation && x.status !== "Removed" && x.playerId === profile), "Profile already participating");
+      const reservation = profile && Object.values(room.members).find((x) => x.reservation && x.status !== "Removed" && x.playerId === profile);
+      const seat = reservation && !active(room) ? reservation.seat : null;
+      if (reservation) {
+        reservation.seat = null;
+        reservation.status = "Removed";
       }
-      room.members[uid] = { uid, playerId: null, requestedPlayerId: action.playerId || null, name: action.name.trim(), kind: "human", seat: null, status: "Invited", approved: false, ready: false, connected: true, joinedAt: now };
+      room.members[uid] = { uid, playerId: profile, requestedPlayerId: profile, name: action.name.trim(), kind: "human", seat, status: seat !== null ? "Seated" : profile ? "Waiting" : "Invited", approved: !!profile, ready: false, connected: true, joinedAt: (p == null ? void 0 : p.joinedAt) || now };
+      if (profile) {
+        if (room.totals[profile] === void 0) room.totals[profile] = 0;
+        room.scoreNames[profile] = action.name.trim();
+      }
+      if (seat !== null) resetReady(room);
       event(room, "join", { uid }, now);
+    } else if (type === "claimSeat") {
+      member(room, uid);
+      assert(!active(room), "Seat order is locked during a hand");
+      assert(p.kind === "human" && p.approved && p.playerId && !p.reservation && connected(p), "Join with your existing player profile first");
+      assert(action.target === void 0 || action.target === uid, "You can only choose your own seat");
+      assert(Number.isInteger(action.seat) && action.seat >= 1 && action.seat <= room.mode, "Invalid seat");
+      assert(!ordered(room).some((x) => x.uid !== uid && x.seat === action.seat), "Seat occupied");
+      if (p.seat !== action.seat) {
+        p.seat = action.seat;
+        p.sittingOut = false;
+        p.status = "Seated";
+        resetReady(room);
+        event(room, "seating", { action: type, uid, seat: action.seat }, now);
+      }
     } else if (type === "presence") {
       member(room, uid);
       assert(typeof action.connected === "boolean", "Invalid presence");
