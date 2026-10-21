@@ -6,14 +6,15 @@ export class GameStore {
  profile(id){return id&&/^[-a-zA-Z0-9_]{1,128}$/.test(id)?this.db.get('players/'+id):null;}
  async lookup(code){if(!/^[A-Z2-9]{8}$/.test(code))throw Error('Room not found');return (await this.db.get('onlineCodes/'+code))?.roomId;}
  async links(tx,before,next){
-  const writes=[];for(const p of Object.values(next.members)){
+  // Players is a shared scoring roster, not an Auth-account registry. Canonical
+  // room members own seats/cards; legacy global bindings must not lock new rooms.
+  const seen=new Map();for(const p of Object.values(next.members)){
    if(p.kind!=='human'||!p.approved||!p.playerId||p.reservation||p.status==='Removed')continue;
-   if(before?.members[p.uid]?.approved&&before.members[p.uid].playerId===p.playerId)continue;
-   const path='onlineProfileLinks/'+p.playerId,link=await this.db.get(path,tx);
-   if(link&&link.uid!==p.uid)throw Error('This player profile belongs to another identity; account recovery is required');
-   writes.push(this.db.set(path,{uid:p.uid,playerId:p.playerId}));
-  }return writes;
+   if(seen.has(p.playerId)&&seen.get(p.playerId)!==p.uid)throw Error('Profile already participating in this room');
+   seen.set(p.playerId,p.uid);
+  }return [];
  }
+
  projection(before,next){
   const db=this.db,root='onlineRooms/'+next.id,writes=[db.set('onlineState/'+next.id,next),db.set(root,{...R.publicState(next),serverNow:Date.now()})];
   for(const p of Object.values(next.members)){

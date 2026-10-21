@@ -180,7 +180,7 @@ ran. An updated Android System WebView is required for the online module.
 ## Self-service seats (v2.7.7)
 
 Joining with an existing player profile now immediately links that authenticated
-identity, without admin approval. Existing profile-ownership links remain enforced.
+identity, without admin approval. Room participant ownership remains enforced; a shared scoring name is not a permanent Auth-account binding.
 The participant chooses **Take seat N** in the lobby. Seat claims are authoritative,
 atomic, limited to the caller, and only permitted between hands. Full tables and
 mid-hand arrivals wait; reconnecting restores the same seat and private cards.
@@ -223,3 +223,15 @@ Server-alarm failure backoff is persisted and cannot be shortened by an overdue
 turn deadline or coordinator restart. A successful recovery clears it. Runtime
 tests inject a temporary presence-service failure, verify bounded retry rather
 than a tight loop, and reconnect/resume the exact paused hand.
+
+### Shared roster names on another device
+
+The old global `onlineProfileLinks` binding incorrectly treated a shared tracker
+profile as a permanently owned login. New room admission no longer consults or
+rewrites those legacy documents. Existing players, scores and historical records
+are retained. The room code allows a signed-in/anonymous participant to select an
+available roster profile, with no admin approval. This name selection is not proof
+of a person's real-world identity. Within a room, one active profile maps to one
+UID; duplicate enrolment, foreign-seat actions and private-card takeover remain
+rejected. Reconnect restores the same UID. A different UID needs the old
+participant removed at a permitted hand boundary rather than stealing that seat.

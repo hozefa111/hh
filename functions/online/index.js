@@ -9,7 +9,8 @@ const crypto=require('node:crypto');const R=require('./shared/engine');const {Ga
 initializeApp();const db=getFirestore(),region='asia-south1';
 const id=()=>crypto.randomUUID().replaceAll('-',''),random=n=>crypto.randomInt(n),code=()=>Array.from({length:8},()=> 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[random(32)]).join('');
 const canonical=id=>db.doc('onlineState/'+id),publicRef=id=>db.doc('onlineRooms/'+id);
-async function bindProfile(tx,room,p){if(p.kind!=='human'||!p.approved||!p.playerId||p.reservation)return;const ref=db.doc('onlineProfileLinks/'+p.playerId),snap=await tx.get(ref);if(snap.exists&&snap.data().uid!==p.uid)throw new Error('This player profile belongs to another identity; account recovery is required');return {ref,data:{uid:p.uid,playerId:p.playerId}};}
+async function bindProfile(tx,room,p){if(p.kind!=='human'||!p.approved||!p.playerId||p.reservation||p.status==='Removed')return;const duplicate=Object.values(room.members).some(other=>other.uid!==p.uid&&other.kind==='human'&&other.approved&&!other.reservation&&other.status!=='Removed'&&other.playerId===p.playerId);if(duplicate)throw new Error('Profile already participating in this room');return null;}
+
 
 function writeRoom(tx,before,next,links=[]){
  tx.set(canonical(next.id),next);tx.set(publicRef(next.id),{...R.publicState(next),serverNow:Date.now()});

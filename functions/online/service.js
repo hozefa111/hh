@@ -23,10 +23,10 @@ class GameService{
   return this.store.transact(roomId,key,fingerprint,(room)=>{
    for(const field of ['target','other'])if(input[field]!==undefined&&!Object.prototype.hasOwnProperty.call(room.members,input[field]))throw new Error('Not a room participant');
    const joining=input.type==='join';
-   if(joining){const existing=room.members[uid];if(existing&&existing.status!=='Removed'&&existing.playerId&&existing.playerId!==input.playerId)throw new Error('Reconnect with your existing player profile');const duplicate=Object.values(room.members).find(p=>p.uid!==uid&&p.kind==='human'&&!p.reservation&&p.status!=='Removed'&&(p.playerId===input.playerId||(!p.approved&&p.requestedPlayerId===input.playerId)));if(duplicate)throw new Error('Profile already participating');}
+   if(joining){const existing=room.members[uid];if(existing&&existing.status!=='Removed'&&existing.playerId&&existing.playerId!==input.playerId)throw new Error('Reconnect with your existing player profile');const duplicate=Object.values(room.members).find(p=>p.uid!==uid&&p.kind==='human'&&!p.reservation&&p.status!=='Removed'&&(p.playerId===input.playerId||(!p.approved&&p.requestedPlayerId===input.playerId)));if(duplicate)throw new Error('Profile already participating in this room. Reconnect using the same account/device, or ask the admin to remove the old participant between hands.');}
   const gameAction=['bid','trump','partners','play'].includes(input.type),sameTurn=gameAction&&room.hand?.id===request.handId&&room.hand?.turnGeneration===request.turnGeneration;
    if(!joining&&request.revision!==room.revision&&!sameTurn)throw new Error('State changed. Please retry with the latest table.');
-   if(['approve','reserve'].includes(input.type)&&input.playerId){const current=Object.values(room.members).find(p=>p.playerId===input.playerId&&p.uid!==input.target&&p.kind==='human'&&!p.reservation&&p.status!=='Removed');if(current)throw new Error('Profile already participating');}
+   if(['approve','reserve'].includes(input.type)&&input.playerId){const current=Object.values(room.members).find(p=>p.playerId===input.playerId&&p.uid!==input.target&&p.kind==='human'&&!p.reservation&&p.status!=='Removed');if(current)throw new Error('Profile already participating in this room. Reconnect using the same account/device, or ask the admin to remove the old participant between hands.');}
    const next=R.command(room,uid,input,this.clock(),this.random);return {next,result:{roomId,revision:next.revision,serverNow:this.clock()}};
   });
  }

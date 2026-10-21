@@ -80,10 +80,12 @@ test('REST receipts reject command mutation; hidden partners do not enter public
  const own=f.memory.get('onlineRooms/'+f.roomId+'/private/admin');assert.equal(own.cards.length,7);
  f.memory.put('players/pwaiting',{name:'Waiting'});await f.send('waiting',{type:'join',playerId:'pwaiting'});const waiting=f.memory.get('onlineRooms/'+f.roomId+'/private/waiting');assert.deepEqual(waiting.cards,[]);
 });
-test('REST profile linking cannot steal a previously linked human identity',async()=>{
- const f=await fixture(4);f.memory.put('players/pb',{name:'B'});f.memory.put('onlineProfileLinks/pb',{uid:'someone-else',playerId:'pb'});
- await assert.rejects(f.send('b',{type:'join',playerId:'pb'}),/another identity/);
- assert.equal(f.rooms.get(f.roomId).members.b,undefined);
+test('a legacy global roster binding does not lock a new device out of a different room',async()=>{
+ const f=await fixture(4);f.memory.put('players/pb',{name:'B'});const old={uid:'old-device',playerId:'pb'};f.memory.put('onlineProfileLinks/pb',old);
+ await f.send('new-device',{type:'join',playerId:'pb'});await f.send('new-device',{type:'claimSeat',seat:2});
+ assert.equal(f.rooms.get(f.roomId).members['new-device'].seat,2);assert.deepEqual(f.memory.get('onlineProfileLinks/pb'),old);assert.equal(f.memory.get('players/pb').name,'B');
+ await assert.rejects(f.send('third-device',{type:'join',playerId:'pb'}),/already participating in this room/);
+ assert.equal(f.rooms.get(f.roomId).members['new-device'].uid,'new-device');assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/private/third-device'),null);
 });
 
 test('session deletion rejects older metadata-only clients before deleting any data',async()=>{const f=await fixture(4);await f.send('admin',{type:'stop'});await assert.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'delete',commandId:'old_client_123'}),/Update the app/);assert(f.memory.get('sessions/'+f.roomId));});
@@ -123,7 +125,7 @@ test('REST replacement is atomic, clears former private access and retains a sep
 
 for(const mode of [4,6])test(`${mode}-seat REST self-service join/seat links identity and protects private cards`,async()=>{
  const f=await fixture(mode);f.memory.put('players/pb',{name:'Human B'});await f.send('b',{type:'join',playerId:'pb'});
- assert.equal(f.memory.get('onlineProfileLinks/pb').uid,'b');assert.equal(f.rooms.get(f.roomId).members.b.approved,true);
+ assert.equal(f.memory.get('onlineRooms/'+f.roomId+'/members/b').uid,'b');assert.equal(f.rooms.get(f.roomId).members.b.approved,true);
  await f.send('b',{type:'claimSeat',seat:2});assert.equal(f.memory.get('onlineRooms/'+f.roomId).members.b.seat,2);
  await f.send('b',{type:'ready'});for(let seat=3;seat<=mode;seat++)await f.send('admin',{type:'bot',seat});await f.send('b',{type:'ready'});await f.send('admin',{type:'ready'});
  const cards=f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards;assert.equal(cards.length,mode===4?10:7);
