@@ -12,7 +12,7 @@ if (emulator) {
 const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : window.KALI_API_BASE || "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
 let subscribedRoomId = null, loadingRoom = false, connectionReady = false;
 let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
-let renderFrame = null, motionQueue = [], collectionUntil = 0, collectionTimer = null;
+let renderFrame = null, motionQueue = [], collectionUntil = 0, collectionTimer = null, pendingCollection = null;
 let reduced = localStorage.getItem("kaliReducedMotion") === "true" || matchMedia("(prefers-reduced-motion: reduce)").matches;
 const esc = (v) => String(v != null ? v : "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const uid = () => user == null ? void 0 : user.uid, name = (id) => {
@@ -108,6 +108,7 @@ function partnerStatus(h) {
 function clearCollection() {
   clearTimeout(collectionTimer);
   collectionTimer = null;
+  pendingCollection = null;
   collectionUntil = 0;
   document.querySelectorAll(".trick-flight,.trick-announcement").forEach((el) => el.remove());
 }
@@ -123,6 +124,18 @@ function collectTrick(trick) {
   announcement.setAttribute("role", "status");
   announcement.textContent = name(trick.winner) + " won the trick \xB7 +" + trick.points + " captured points";
   document.body.appendChild(announcement);
+  pendingCollection = { trick, area, target };
+  collectionTimer = setTimeout(() => {
+    clearCollection();
+    render();
+  }, duration);
+}
+function animateCollection() {
+  var _a, _b;
+  if (!pendingCollection) return;
+  const { trick, area: oldArea, target: oldTarget } = pendingCollection;
+  pendingCollection = null;
+  const area = ((_a = document.querySelector(".felt")) == null ? void 0 : _a.getBoundingClientRect()) || oldArea, target = ((_b = document.querySelector('.table-seat[data-player="' + CSS.escape(trick.winner) + '"]')) == null ? void 0 : _b.getBoundingClientRect()) || oldTarget;
   if (!reduced) {
     const flight = document.createElement("div");
     flight.className = "trick-flight";
@@ -135,10 +148,6 @@ function collectTrick(trick) {
     const dx = target.x + target.width / 2 - area.x - area.width / 2, dy = target.y + target.height / 2 - area.y - area.height / 2;
     flight.animate([{ transform: "translate(-50%,-50%) scale(1)", opacity: 1 }, { transform: "translate(-50%,-50%) scale(1.05)", opacity: 1, offset: 0.22 }, { transform: "translate(calc(-50% + " + dx + "px),calc(-50% + " + dy + "px)) scale(.2)", opacity: 0 }], { duration: 800, easing: "ease-in-out", fill: "forwards" });
   }
-  collectionTimer = setTimeout(() => {
-    clearCollection();
-    render();
-  }, duration);
 }
 function phaseControls(h) {
   if (h.phase === "auction") return `<form id="bid" class="action-bar"><label>Raise<select name="bid">${Array.from({ length: Math.max(0, (250 - h.bid) / 5) }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button class="gold" ${h.bid >= 250 || busy ? "disabled" : ""}>Raise</button>${btn("PASS", "pass")}</form>`;
@@ -200,6 +209,7 @@ function renderNow() {
   const hand = root.querySelector(".my-hand");
   if (hand) hand.scrollLeft = handScroll;
   tick();
+  animateCollection();
   if (!reduced) for (const kind of motionQueue.splice(0)) {
     if (kind === "deal" && !document.querySelector(".hand-card") && ((_d = room == null ? void 0 : room.hand) == null ? void 0 : _d.seatMap.some((p) => p.uid === uid()))) {
       motionQueue.push("deal");

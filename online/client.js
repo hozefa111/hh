@@ -9,7 +9,7 @@ if(emulator){auth.useEmulator('http://'+(window.KALI_HOST||location.hostname)+':
 const host=emulator?'http://'+(window.KALI_HOST||location.hostname)+':5001/'+config.projectId+'/asia-south1/':(window.KALI_API_BASE||'https://asia-south1-'+config.projectId+'.cloudfunctions.net/');
 let subscribedRoomId=null,loadingRoom=false,connectionReady=false;
 let user=null,admin=false,room=null,own={cards:[]},profiles=[],memberships=[],unsubs=[],connection=null,clockAnchor={server:Date.now(),mono:performance.now()},busy=false,selected=null,previous=null,scoreOpen=false,historyOpen=false,historyMore=true,records=[],error='',screen='home';
-let renderFrame=null,motionQueue=[],collectionUntil=0,collectionTimer=null;
+let renderFrame=null,motionQueue=[],collectionUntil=0,collectionTimer=null,pendingCollection=null;
 let reduced=localStorage.getItem('kaliReducedMotion')==='true'||matchMedia('(prefers-reduced-motion: reduce)').matches;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const uid=()=>user?.uid,name=id=>room?.members[id]?.name||'Player';
@@ -38,7 +38,7 @@ function partnerStatus(h){
  const partners=[...new Set(h.partners||[h.direct,h.secret].filter(Boolean))];
  return `<section class="partner-status revealed" aria-live="polite"><b>✦ ${h.bidder===uid()?'Your partner'+(partners.length>1?'s':''):'Hukum partners'}: ${partners.map(name).map(esc).join(' & ')}</b><span>${esc(name(h.secret))} played ${esc(h.called.slice(0,-1))}${suit(h.called.slice(-1))}${h.secret===h.direct?' · Direct and called-card partner are the same player':''}</span></section>`;
 }
-function clearCollection(){clearTimeout(collectionTimer);collectionTimer=null;collectionUntil=0;document.querySelectorAll('.trick-flight,.trick-announcement').forEach(el=>el.remove());}
+function clearCollection(){clearTimeout(collectionTimer);collectionTimer=null;pendingCollection=null;collectionUntil=0;document.querySelectorAll('.trick-flight,.trick-announcement').forEach(el=>el.remove());}
 function collectTrick(trick){
  clearCollection();if(!trick||document.hidden)return;
  const felt=document.querySelector('.felt'),seat=document.querySelector('.table-seat[data-player="'+CSS.escape(trick.winner)+'"]');
@@ -46,12 +46,17 @@ function collectTrick(trick){
  const area=felt.getBoundingClientRect(),target=seat.getBoundingClientRect(),duration=reduced?300:850;
  collectionUntil=performance.now()+duration;
  const announcement=document.createElement('div');announcement.className='trick-announcement';announcement.setAttribute('role','status');announcement.textContent=name(trick.winner)+' won the trick · +'+trick.points+' captured points';document.body.appendChild(announcement);
+ pendingCollection={trick,area,target};
+ collectionTimer=setTimeout(()=>{clearCollection();render();},duration);
+}
+function animateCollection(){
+ if(!pendingCollection)return;const {trick,area:oldArea,target:oldTarget}=pendingCollection;pendingCollection=null;
+ const area=document.querySelector('.felt')?.getBoundingClientRect()||oldArea,target=document.querySelector('.table-seat[data-player="'+CSS.escape(trick.winner)+'"]')?.getBoundingClientRect()||oldTarget;
  if(!reduced){const flight=document.createElement('div');flight.className='trick-flight';flight.dataset.winner=trick.winner;flight.style.setProperty('--flight-cols',trick.cards.length===6?3:2);flight.style.left=(area.x+area.width/2)+'px';flight.style.top=(area.y+area.height/2)+'px';
   flight.innerHTML=trick.cards.map((p,i)=>`<div class="flight-card" style="--flight-index:${i};--flight-count:${trick.cards.length}">${cardHTML(p.card)}</div>`).join('');document.body.appendChild(flight);
   const dx=target.x+target.width/2-area.x-area.width/2,dy=target.y+target.height/2-area.y-area.height/2;
   flight.animate([{transform:'translate(-50%,-50%) scale(1)',opacity:1},{transform:'translate(-50%,-50%) scale(1.05)',opacity:1,offset:.22},{transform:'translate(calc(-50% + '+dx+'px),calc(-50% + '+dy+'px)) scale(.2)',opacity:0}],{duration:800,easing:'ease-in-out',fill:'forwards'});
  }
- collectionTimer=setTimeout(()=>{clearCollection();render();},duration);
 }
 function phaseControls(h){if(h.phase==='auction')return `<form id="bid" class="action-bar"><label>Raise<select name="bid">${Array.from({length:Math.max(0,(250-h.bid)/5)},(_,i)=>h.bid+5+i*5).map(n=>`<option>${n}</option>`).join('')}</select></label><button class="gold" ${h.bid>=250||busy?'disabled':''}>Raise</button>${btn('PASS','pass')}</form>`;
  if(h.phase==='trump')return `<section class="panel"><h2>Choose Hukum</h2><div class="suit-picker">${R.SUITS.map(s=>btn(suit(s)+' '+R.NAMES[s],'trump:'+s,false,['H','D'].includes(s)?'red':'')).join('')}</div></section>`;
@@ -65,7 +70,7 @@ function renderNow(){renderFrame=null;root.dataset.revision=room?.revision??'';c
 const drafts=Array.from(root.querySelectorAll('form')).map(f=>({id:f.id,target:f.dataset.target,values:Array.from(f.querySelectorAll('input,select')).map(i=>({name:i.name,value:i.value}))}));
 const focus=document.activeElement,focused=focus?.name?{name:focus.name,form:focus.form?.id,start:focus.selectionStart}:null;document.body.classList.toggle('reduced',reduced);root.innerHTML=header()+`<main>${error?`<p class="error">${esc(error)}</p>`:''}${room?lobby():loadingRoom?'<section class="panel"><h2>Connecting to your table…</h2><p>Restoring seats and your private hand.</p></section>':home()}</main><footer>3 PATTI PRO · Same players. Same scorecard.</footer>`;for(const draft of drafts){const form=Array.from(root.querySelectorAll('form')).find(f=>f.id===draft.id&&f.dataset.target===draft.target);if(form)for(const v of draft.values){const input=Array.from(form.elements).find(i=>i.name===v.name);if(input&&(!(input instanceof HTMLSelectElement)||Array.from(input.options).some(o=>o.value===v.value)))input.value=v.value;}}
 if(focused){const f=document.getElementById(focused.form),i=f&&Array.from(f.elements).find(i=>i.name===focused.name);if(i){i.focus({preventScroll:true});try{i.setSelectionRange(focused.start,focused.start);}catch{}}}
-if(window.KALI_NATIVE_PENDING)root.querySelectorAll('button').forEach(b=>b.disabled=true);window.scrollTo(0,scroll);const hand=root.querySelector('.my-hand');if(hand)hand.scrollLeft=handScroll;tick();
+if(window.KALI_NATIVE_PENDING)root.querySelectorAll('button').forEach(b=>b.disabled=true);window.scrollTo(0,scroll);const hand=root.querySelector('.my-hand');if(hand)hand.scrollLeft=handScroll;tick();animateCollection();
 if(!reduced)for(const kind of motionQueue.splice(0)){
  if(kind==='deal'&&!document.querySelector('.hand-card')&&room?.hand?.seatMap.some(p=>p.uid===uid())){motionQueue.push('deal');continue;}
  if(kind==='deal')document.querySelectorAll('.hand-card').forEach((c,i)=>c.animate([{transform:'translateY(-120px) scale(.6)',opacity:0},{transform:'translateY(4px) scale(1)',opacity:1}],{duration:350,delay:i*45}));
