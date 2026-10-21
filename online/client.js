@@ -72,6 +72,7 @@ const focus=document.activeElement,focused=focus?.name?{name:focus.name,form:foc
 if(focused){const f=document.getElementById(focused.form),i=f&&Array.from(f.elements).find(i=>i.name===focused.name);if(i){i.focus({preventScroll:true});try{i.setSelectionRange(focused.start,focused.start);}catch{}}}
 if(window.KALI_NATIVE_PENDING)root.querySelectorAll('button').forEach(b=>b.disabled=true);window.scrollTo(0,scroll);const hand=root.querySelector('.my-hand');if(hand)hand.scrollLeft=handScroll;tick();animateCollection();
 if(!reduced)for(const kind of motionQueue.splice(0)){
+ if(kind==='card'&&performance.now()<collectionUntil){motionQueue.push('card');continue;}
  if(kind==='deal'&&!document.querySelector('.hand-card')&&room?.hand?.seatMap.some(p=>p.uid===uid())){motionQueue.push('deal');continue;}
  if(kind==='deal')document.querySelectorAll('.hand-card').forEach((c,i)=>c.animate([{transform:'translateY(-120px) scale(.6)',opacity:0},{transform:'translateY(4px) scale(1)',opacity:1}],{duration:350,delay:i*45}));
  if(kind==='deal'){

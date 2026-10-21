@@ -211,6 +211,10 @@ function renderNow() {
   tick();
   animateCollection();
   if (!reduced) for (const kind of motionQueue.splice(0)) {
+    if (kind === "card" && performance.now() < collectionUntil) {
+      motionQueue.push("card");
+      continue;
+    }
     if (kind === "deal" && !document.querySelector(".hand-card") && ((_d = room == null ? void 0 : room.hand) == null ? void 0 : _d.seatMap.some((p) => p.uid === uid()))) {
       motionQueue.push("deal");
       continue;
