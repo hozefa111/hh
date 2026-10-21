@@ -69,6 +69,7 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
  A.equal(await tracker.locator('.online-launch').count(),1);await tracker.evaluate(()=>navTo('view-round'));
  await tracker.locator('[onclick="onHukumSelect(\'online_admin\')"]').click();await tracker.locator('[onclick="onPartnerToggle(\'human_2\')"]').click();await tracker.locator('[onclick="onResultSelect(\'win\')"]').click();
  const manualBefore=(await db.collection('rounds').where('source','==','manual').get()).size;await tracker.locator('#save-round-btn').click();await waitFor(async()=>{const rounds=await db.collection('rounds').get();return rounds.docs.filter(d=>d.data().source==='manual').length>manualBefore&&rounds.docs.some(d=>d.data().source==='manual'&&d.data().bid===155&&d.data().hukumId==='online_admin'&&d.id!=='manual_baseline');},'manual entry preserved');
+ await tracker.locator('#round-share-modal.active .close-modal').click();
  for(const view of ['view-players','view-ranks','view-history']){await tracker.evaluate(v=>navTo(v),view);A(await tracker.locator('#'+view).evaluate(e=>e.classList.contains('active')));}
  report.checks.push('existing Home, manual score save, Players, Rankings and History work with unified human lifetime totals');
  await send(owner,six.roomId,{type:'stop'});await tracker.waitForFunction(id=>sessions.some(s=>s.id===id&&s.endTime),six.roomId);
