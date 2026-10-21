@@ -34,6 +34,12 @@ Official limits: [Durable Objects pricing](https://developers.cloudflare.com/dur
 
 The existing `functions/online` deployment is retained as an optional future Blaze adapter; it must not be deployed as part of this free prototype.
 
-## Release status
+## Verified deployment status
 
-The free adapter is being verified locally. Cloudflare account authorization, service-account secret provisioning, production endpoint configuration/rules rollout, hosted multiplayer verification and a new signed APK remain release gates. A Wrangler **dry run does not deploy** the API. Existing previously built APK candidates still reference the unavailable Cloud Functions endpoint until the free deployment is wired in; they must not be labelled final.
+The API is deployed at `https://three-patti-pro-online.three-patti-free-backend.workers.dev/`. Firebase stays on Spark; Cloud Functions/Tasks were not deployed. The service-account credential is a Worker secret, never a bundled client file. Restrictive Firestore/RTDB rules were deployed after backups, and the established tracker administrator retains access.
+
+Actual hosted verification completed two four-seat hands and one six-seat hand with separate human identities and bots, exact 250-point captures, real 30-second legal timeout, private-hand denial even for admin, admin-last Ready, session persistence, disconnect/reconnect and void-without-score checks. The native-origin browser completed the real one-use exchange and restored the exact UID without ignoring HTTPS errors.
+
+All verification-only game data and three synthetic Auth identities were removed. The original six players, 324 rounds and 19 sessions remain unchanged; all 372 original top-level document fields were compared against the private backup.
+
+The existing web Home/online invitation URLs are published and point to this backend. Native app code `0dd8017` passed 192 Release JVM tests and 43 instrumentation tests each on API 30/35. The same-package stable-signed APK bundles the actual deployed endpoint. Physical-phone frame performance, real microphone availability and every Android vendor build are not certified by these tests.
