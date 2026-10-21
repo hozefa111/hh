@@ -26,8 +26,14 @@ export class Firestore {
  }
  async get(path,transaction){
   const name=this.name(path);
-  if(transaction){const rows=await this.request(':batchGet','POST',{documents:[name],transaction}),doc=rows.find(r=>r.found)?.found;if(!doc)return null;const data=decode({mapValue:{fields:doc.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:doc.updateTime||null});return data;}
+  if(transaction)return (await this.getMany([path],transaction))[0];
   try{const d=await this.request('/'+path);const data=decode({mapValue:{fields:d.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:d.updateTime||null});return data;}catch(e){if(e.status===404)return null;throw e;}
+ }
+ async getMany(paths,transaction){
+  const documents=paths.map(path=>this.name(path));
+  const rows=await this.request(':batchGet','POST',{documents,...(transaction?{transaction}:{})});
+  const found=new Map(rows.filter(r=>r.found).map(r=>[r.found.name,r.found]));
+  return documents.map(name=>{const doc=found.get(name);if(!doc)return null;const data=decode({mapValue:{fields:doc.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:doc.updateTime||null});return data;});
  }
  async scan(collection,after,limit=100,transaction){
   const structuredQuery={from:[{collectionId:collection.split('/').at(-1)}],orderBy:[{field:{fieldPath:'__name__'},direction:'ASCENDING'}],limit};

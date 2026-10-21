@@ -19,7 +19,7 @@ export default {async fetch(request,env){
 }};
 export class KaliCoordinator extends DurableObject {
  constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.queue=Promise.resolve();
-  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});
+  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});this.lastPresenceScan=0;
   ctx.blockConcurrencyWhile(async()=>{
    const rooms=await this.storage.list({prefix:'room:'});
    for(const [key,r]of rooms)await this.storage.put(key,{id:r.id,recover:true});
@@ -59,7 +59,10 @@ export class KaliCoordinator extends DurableObject {
     await this.storage.delete(key);result={token:await this.identity.customToken(value.uid)};
    }else{
     const token=/^Bearer (.+)$/.exec(request.headers.get('Authorization')||'');if(!token)throw Error('Sign in required');
-    const who=await this.identity.verify(token[1]);await this.rate(who.uid);who.admin=who.admin||!!await this.db.get('admins/'+who.uid);
+    const who=await this.identity.verify(token[1]);await this.rate(who.uid);
+    // Room actions use canonical room ownership, not the global tracker role.
+    // Keep token revocation checks on every request; only avoid irrelevant reads.
+    if(['create','sessionHistory','register'].includes(body.operation))who.admin=who.admin||!!await this.db.get('admins/'+who.uid);
     if(body.operation==='create')result=await this.service.create(who,body);
     else if(body.operation==='sessionHistory')result=await this.service.history(who,body);
     else if(body.operation==='clock')result={serverNow:Date.now()};
@@ -93,12 +96,14 @@ export class KaliCoordinator extends DurableObject {
    for(const {id}of(await this.storage.list({prefix:'delete:'})).values())await this.store.deletion.step(id);
    const rooms=await this.storage.list({prefix:'room:'});
    // One server read serves every tracked room. No private card state enters RTDB.
-   const presence=rooms.size?await this.realtime('/onlinePresence'):null;
+   const scanPresence=rooms.size&&Date.now()-this.lastPresenceScan>=5000;
+   const presence=scanPresence?await this.realtime('/onlinePresence'):null;
+   if(scanPresence)this.lastPresenceScan=Date.now();
    for(const [key,cached]of rooms){
     let room=cached.recover?await this.db.get('onlineState/'+cached.id):cached;
     if(!room||room.status==='stopped'){await this.storage.delete(key);continue;}
     if(cached.recover)await this.storage.put(key,room);
-    for(const p of Object.values(room.members))if(p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
+    for(const p of Object.values(room.members))if(scanPresence&&p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
      const connected=Object.keys(presence?.[room.id]?.[p.uid]?.connections||{}).length>0;
      if(p.connected!==connected||connected&&p.status==='Disconnected')await this.service.presence(room.id,p.uid,connected);
      // Revoke access for former participants when room state changes, below.

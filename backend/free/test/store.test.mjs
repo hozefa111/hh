@@ -25,7 +25,7 @@ class RestMemory {
   this.calls.push({url,method:init.method});const body=init.body?JSON.parse(init.body):{},suffix=new URL(url).pathname.split('/documents')[1];
   if(suffix===':beginTransaction')return Response.json({transaction:'memory'});
   if(suffix===':rollback')return Response.json({});
-  if(suffix===':batchGet'){const name=body.documents[0],fields=this.docs.get(name.split('/documents/')[1]);return Response.json([fields?{found:{name,fields}}:{missing:name}]);}
+  if(suffix===':batchGet')return Response.json(body.documents.map(name=>{const fields=this.docs.get(name.split('/documents/')[1]);return fields?{found:{name,fields}}:{missing:name};}));
   if(suffix.endsWith(':runQuery')){const q=body.structuredQuery,col=suffix.slice(1,-9),prefix=(col?col+'/':'')+q.from[0].collectionId+'/',after=q.startAt?.values[0].referenceValue.split('/documents/')[1];const docs=[...this.docs.entries()].filter(([k])=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')&&(!after||k>after)).sort(([a],[b])=>a<b?-1:a>b?1:0).slice(0,q.limit).map(([k,fields])=>({document:{name:'projects/demo/databases/(default)/documents/'+k,fields}}));return Response.json(docs);}
   if(suffix===':commit'){
    for(const w of body.writes)if(w.currentDocument?.exists===false&&this.docs.has(w.update.name.split('/documents/')[1]))return Response.json({error:{status:'ALREADY_EXISTS'}},{status:409});
@@ -129,4 +129,12 @@ for(const mode of [4,6])test(`${mode}-seat REST self-service join/seat links ide
  const cards=f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards;assert.equal(cards.length,mode===4?10:7);
  f.memory.put('players/pw',{name:'Waiting'});await f.send('w',{type:'join',playerId:'pw'});assert.deepEqual(f.memory.get('onlineRooms/'+f.roomId+'/private/w').cards,[]);
  await assert.rejects(f.send('w',{type:'claimSeat',seat:2}),/locked/);assert.deepEqual(f.memory.get('onlineRooms/'+f.roomId+'/private/b').cards,cards);
+});
+
+test('batch transaction reads preserve request order, missing documents and cascade versions',async()=>{
+ const db=new Firestore('demo',async()=>'fake',async(url,init)=>{const body=JSON.parse(init.body);assert.equal(body.documents.length,3);assert.equal(body.transaction,'transaction');return Response.json([{found:{name:body.documents[2],fields:encode({name:'Third'}).mapValue.fields,updateTime:'v3'}},{missing:body.documents[1]},{found:{name:body.documents[0],fields:encode({name:'First'}).mapValue.fields,updateTime:'v1'}}]);});
+ const rows=await db.getMany(['players/a','players/b','players/c'],'transaction');assert.deepEqual(rows,[{name:'First'},null,{name:'Third'}]);assert.equal(rows[0]._cascadeVersion,'v1');assert.equal(rows[2]._cascadeVersion,'v3');
+});
+test('a keyed move reads canonical state and its receipt in one atomic batch',async()=>{
+ const f=await fixture(4);const start=f.memory.calls.length;await f.send('admin',{type:'bot',seat:2});const reads=f.memory.calls.slice(start).filter(c=>c.url.endsWith(':batchGet'));assert.equal(reads.length,1);
 });
