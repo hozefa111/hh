@@ -40,7 +40,12 @@
       var _a;
       return !((_a = voids[p.uid]) == null ? void 0 : _a.has(R.card(c).suit)) && R.trickWinner([...h.trick, { uid: p.uid, card: c }], h.trump) === p.uid;
     })));
-    if (partnerSafe) return moves.slice().sort((a, b) => R.points(b) - R.points(a) || low(a, b))[0];
+    if (partnerSafe) {
+      const donations = moves.filter((c) => R.card(c).suit !== h.trump);
+      if (donations.length) return donations.sort((a, b) => R.points(b) - R.points(a) || low(a, b))[0];
+      const winnerCard = h.trick.find((p) => p.uid === current).card;
+      return R.card(winnerCard).suit === h.trump ? moves.slice().sort((a, b) => R.points(b) - R.points(a) || low(a, b))[0] : moves[0];
+    }
     const winning = moves.filter((c) => R.trickWinner([...h.trick, { uid, card: c }], h.trump) === uid).sort(low);
     const secure = winning.filter((card) => !later.some((p) => unknown.some((c) => {
       var _a;

@@ -177,7 +177,7 @@ function status(p) {
 function table() {
   const h = room.hand, localCards = own.handId === h.id ? own.cards : [], me = room.members[uid()], mySeat = (me == null ? void 0 : me.seat) || 1, turn = h.turn === uid(), canPlay = performance.now() >= collectionUntil && seatConnected() && turn && h.phase === "playing" && !room.paused && !busy && own.handId === h.id && own.cards.length === h.counts[uid()], legal = canPlay ? R.legal(localCards, h.trick) : [];
   const last = h.tricks.at(-1), collecting = performance.now() < collectionUntil, trick = collecting ? [] : h.trick;
-  return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump ? R.NAMES[h.trump] : "Choosing"}</b></span><span>CONTRACT <b>${h.bid} \xB7 ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called ? esc(h.called.slice(0, -1)) + suit(h.called.slice(-1)) : "\u2014"}</b></span></section>${partnerStatus(h)}<div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} \xB7 TRICK ${Math.min(h.tricks.length + 1, h.mode === 4 ? 10 : 7)}</small></div>${h.seatMap.map((p) => {
+  return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump ? R.NAMES[h.trump] : "Choosing"}</b></span><span>${h.phase === "auction" ? "CURRENT BID" : "CONTRACT"} <b>${h.bid} \xB7 ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called ? esc(h.called.slice(0, -1)) + suit(h.called.slice(-1)) : "\u2014"}</b></span></section>${partnerStatus(h)}<div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} \xB7 TRICK ${Math.min(h.tricks.length + 1, h.mode === 4 ? 10 : 7)}</small></div>${h.seatMap.map((p) => {
     const angle = (p.seat - mySeat + room.mode) % room.mode * 2 * Math.PI / room.mode, x = 50 - Math.sin(angle) * 40, y = 50 + Math.cos(angle) * 39;
     return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn === p.uid ? "current" : ""} ${p.uid === uid() ? "self" : ""} ${(last == null ? void 0 : last.winner) === p.uid ? "trick-winner" : ""}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind === "bot" ? "\u265F" : esc(p.name.slice(0, 1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} \xB7 ${p.kind === "bot" ? "BOT \xB7 " : ""}${h.counts[p.uid]} cards \xB7 ${h.tricks.filter((t) => t.winner === p.uid).length} tricks</small><span>${room.members[p.uid].connected ? "" : "\u25CB Offline \xB7 "}${h.bidder === p.uid ? "\u265B Bidder" : h.direct === p.uid ? "Direct partner" : h.revealed && h.secret === p.uid ? "\u2726 Called partner" : ""}</span></div>`;
   }).join("")}<div class="centre-trick" data-players="${room.mode}" data-trick="${h.tricks.length}">${trick.map((p) => `<div data-player="${esc(p.uid)}" class="played-card ${p.automatic ? "automatic" : ""}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason === "timeout" ? " \xB7 Timeout" : p.reason === "bot" ? " \xB7 Bot" : p.automatic ? " \xB7 Auto" : ""}</small></div>`).join("")}</div></div></div>${last ? `<p class="last-trick" role="status">\u2713 ${esc(name(last.winner))} won trick ${h.tricks.length} \xB7 +${last.points} captured points</p>` : ""}<section class="turn-bar"><span class="turn-label">${room.paused ? "Paused" : collecting ? "Collecting trick\u2026" : turn ? "Your turn" : esc(name(h.turn)) + "\u2019s turn"}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">\u2014</span></section><p class="hand-hint">Your cards \xB7 All visible \xB7 Glowing cards are playable</p><section class="my-hand" aria-label="Your cards"><div class="hand-fan" style="--hand-cols:${localCards.length > 8 ? 5 : localCards.length > 4 ? 4 : Math.max(1, localCards.length)}">${localCards.map((c, i) => `<button class="hand-card ${legal.includes(c) ? "legal" : canPlay ? "dim" : "waiting"} ${selected === c ? "selected" : ""}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c) ? "disabled" : ""} aria-label="${esc(R.card(c).rank + " " + R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join("")}</div></section><section class="phase-area">${selected && canPlay ? `<div class="play-confirm">${btn("Play " + esc(selected), "confirm-card", false, "gold")}${btn("Cancel", "cancel-card")}</div>` : ""}${turn && seatConnected() && !room.paused && own.handId === h.id ? phaseControls(h) : `<p class="phase-caption">${room.paused ? "Cards and time preserved" : !seatConnected() ? "Reconnecting to your seat\u2026" : h.phase === "auction" ? "Bidding clockwise \xB7 30s timeout = PASS" : h.phase === "trump" ? "Bidder is choosing Hukum" : h.phase === "partners" ? "Bidder is choosing partners" : "Follow the glowing cards when it is your turn"}</p>`}</section><details class="panel auction"><summary>Bidding history \xB7 ${h.bid}</summary>${h.auction.map((a) => `<p>${esc(name(a.uid))} <b>${a.pass ? "PASS" : a.bid}</b> ${a.reason === "timeout" ? "\xB7 timeout PASS" : a.reason === "bot" ? "\xB7 computer" : a.automatic ? "\xB7 automatic" : ""}</p>`).join("")}<p>Passed: ${h.passed.map(name).map(esc).join(", ") || "None"}</p></details>`;
@@ -234,7 +234,11 @@ function animateCollection() {
   }
 }
 function phaseControls(h) {
-  if (h.phase === "auction") return `<p class="bid-timeout-note">30 seconds \xB7 No bid = automatic PASS</p><form id="bid" class="action-bar"><button type="button" data-action="bid-down" aria-label="Decrease Hukum bid by five">\u2212</button><label>Hukum bid<select name="bid" aria-label="Choose Hukum bid">${Array.from({ length: Math.max(0, (250 - h.bid) / 5) }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button type="button" data-action="bid-up" aria-label="Increase Hukum bid by five">+</button><button class="gold" ${h.bid >= 250 || busy ? "disabled" : ""}>Bid ${h.bid + 5}</button>${btn("PASS", "pass")}</form>`;
+  if (h.phase === "auction") {
+    const timeout = '<p class="bid-timeout-note">30 seconds \xB7 No bid = automatic PASS</p>';
+    if (h.bid >= 250) return `<section class="max-bid-state" aria-live="polite"><strong>Maximum bid reached</strong><span>250 \xB7 ${esc(name(h.bidder))}</span>${timeout}${btn("PASS", "pass")}</section>`;
+    return `<form id="bid" class="bid-controls" data-hand="${esc(h.id)}" data-generation="${h.turnGeneration}" data-base-bid="${h.bid}"><div class="bid-shortcuts">${timeout}<button type="button" data-action="bid-max">Max 250</button></div><div class="action-bar"><button type="button" data-action="bid-down" aria-label="Decrease Hukum bid by five">\u2212</button><label>Hukum bid<select name="bid" aria-label="Choose Hukum bid">${Array.from({ length: (250 - h.bid) / 5 }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button type="button" data-action="bid-up" aria-label="Increase Hukum bid by five">+</button><button class="gold" ${busy ? "disabled" : ""}>Bid ${h.bid + 5}</button>${btn("PASS", "pass")}</div></form>`;
+  }
   if (h.phase === "trump") return `<section class="panel"><h2>Choose Hukum</h2><div class="suit-picker">${R.SUITS.map((s) => btn(suit(s) + " " + R.NAMES[s], "trump:" + s, false, ["H", "D"].includes(s) ? "red" : "")).join("")}</div></section>`;
   if (h.phase === "partners") return `<form id="partners" class="panel"><h2>Choose your partner${room.mode === 6 ? "s" : ""}</h2>${room.mode === 6 ? `<label>Direct partner<select name="direct">${h.seatMap.filter((p) => p.uid !== uid()).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select></label>` : ""}<label>Call any card outside your hand<select name="called">${R.deck(room.mode, h.config).filter((c) => !own.cards.includes(c)).map((c) => `<option value="${c}">${c.slice(0, -1)}${suit(c.slice(-1))} \xB7 ${R.points(c)} points</option>`).join("")}</select></label><p class="muted">Holder stays secret until this card is played. It may be your direct partner.</p><button class="gold" ${busy ? "disabled" : ""}>Confirm partners</button></form>`;
   return "";
@@ -258,6 +262,17 @@ function management() {
   const active = R.active(room), ps = Object.values(room.members).filter((p) => p.status !== "Removed");
   return `<section class="panel management"><h2>Manage table</h2><p class="muted">${active ? "Seats stay locked until this hand completes or is voided." : "Seating changes reset readiness."}</p>${ps.map((p) => `<div class="manage-person"><b>${esc(p.name)}</b><span>${p.kind === "bot" ? "Computer" : status(p)} \xB7 ${p.seat ? "Seat " + p.seat : "Waiting"}</span>${!p.approved && !p.reservation && !active ? `<form class="approve" data-target="${esc(p.uid)}"><select name="playerId">${profiles.map((x) => `<option value="${esc(x.id)}" ${p.requestedPlayerId === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select><button>Approve & link profile</button></form>` : ""}${!active && (p.approved || p.reservation) ? `<form class="assign" data-target="${esc(p.uid)}"><select name="seat">${Array.from({ length: room.mode }, (_, i) => `<option value="${i + 1}">Seat ${i + 1}</option>`).join("")}</select><button>Assign / Move</button></form>${p.uid !== room.admin ? btn("Waiting", "unseat:" + p.uid) + btn("Sit out", "sitout:" + p.uid) + btn("Remove", "remove:" + p.uid) : ""}` : ""}</div>`).join("")}${!active ? `<form id="swap"><h3>Swap seats</h3><select name="target">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><select name="other">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><button>Swap</button></form><form id="reserve"><h3>Reserve existing player</h3><select name="playerId">${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button>Reserve profile</button></form><label>Computer difficulty<select id="difficulty"><option value="normal">Normal</option><option value="easy">Easy</option></select></label>` : ""}${!active ? `<form id="deck-config"><h3>Next-hand deck settings</h3>${room.mode === 4 ? `<label>First six<select name="six1">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[0] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[1] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label>` : ""}<label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}" ${room.config.extraThree === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><button>Save deck & reset Ready</button></form>` : ""}<div class="toolbar">${active ? btn(room.paused ? "Resume" : "Pause", room.paused ? "resume" : "pause") + btn("Void interrupted hand", "void", false, "danger") : ""}</div></section>`;
 }
+function updateBidControls() {
+  const form = root.querySelector("#bid"), select = form == null ? void 0 : form.querySelector("select");
+  if (!select) return;
+  const value = Number(select.value), minimum = room.hand.bid + 5;
+  form.querySelector(".gold").textContent = "Bid " + value;
+  form.querySelector(".gold").disabled = busy || !Number.isInteger(value) || value < minimum || value > 250 || value % 5 !== 0;
+  form.querySelector("[data-action=bid-down]").disabled = busy || value <= minimum;
+  form.querySelector("[data-action=bid-up]").disabled = busy || value >= 250;
+  form.querySelector("[data-action=bid-max]").disabled = busy || value === 250;
+  select.disabled = busy;
+}
 function render() {
   if (renderFrame !== null) cancelAnimationFrame(renderFrame);
   renderFrame = requestAnimationFrame(renderNow);
@@ -267,21 +282,21 @@ function renderNow() {
   renderFrame = null;
   root.dataset.revision = (_a = room == null ? void 0 : room.revision) != null ? _a : "";
   const scroll = window.scrollY, handScroll = ((_b = root.querySelector(".my-hand")) == null ? void 0 : _b.scrollLeft) || 0;
-  const drafts = Array.from(root.querySelectorAll("form")).map((f) => ({ id: f.id, target: f.dataset.target, values: Array.from(f.querySelectorAll("input,select")).map((i) => ({ name: i.name, value: i.value })) }));
+  const drafts = Array.from(root.querySelectorAll("form")).map((f) => ({ id: f.id, target: f.dataset.target, context: f.id === "bid" ? f.dataset.hand + ":" + f.dataset.generation : null, values: Array.from(f.querySelectorAll("input,select")).map((i) => ({ name: i.name, value: i.value })) }));
   const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_c = focus.form) == null ? void 0 : _c.id, start: focus.selectionStart } : null;
   document.body.classList.toggle("reduced", reduced);
   const live = !!room && R.active(room);
   document.body.classList.toggle("live-game", live);
+  document.body.classList.toggle("bidding", live && room.hand.phase === "auction");
   root.innerHTML = header() + `<main class="${live ? "live-main" : ""}">${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? recoveryPanel() + lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main><footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`;
   for (const draft of drafts) {
-    const form = Array.from(root.querySelectorAll("form")).find((f) => f.id === draft.id && f.dataset.target === draft.target);
+    const form = Array.from(root.querySelectorAll("form")).find((f) => f.id === draft.id && f.dataset.target === draft.target && (draft.context === null || draft.context === f.dataset.hand + ":" + f.dataset.generation));
     if (form) for (const v of draft.values) {
       const input = Array.from(form.elements).find((i) => i.name === v.name);
       if (input && (!(input instanceof HTMLSelectElement) || Array.from(input.options).some((o) => o.value === v.value))) input.value = v.value;
     }
   }
-  const bidSelect = root.querySelector("#bid select");
-  if (bidSelect) root.querySelector("#bid button.gold").textContent = "Bid " + bidSelect.value;
+  updateBidControls();
   if (focused) {
     const f = document.getElementById(focused.form), i = f && Array.from(f.elements).find((i2) => i2.name === focused.name);
     if (i) {
@@ -307,7 +322,7 @@ function renderNow() {
       motionQueue.push("deal");
       continue;
     }
-    if (kind === "deal") document.querySelectorAll(".hand-card").forEach((c, i) => c.animate([{ transform: "translateY(-120px) scale(.6)", opacity: 0 }, { transform: "translateY(4px) scale(1)", opacity: 1 }], { duration: 350, delay: i * 45 }));
+    if (kind === "deal") document.querySelectorAll(".hand-card").forEach((c, i) => c.animate([{ filter: "brightness(1.14)" }, { filter: "brightness(1)" }], { duration: 350, delay: i * 20 }));
     if (kind === "deal") {
       const felt = document.querySelector(".felt");
       if (felt) {
@@ -596,8 +611,20 @@ root.addEventListener("submit", async (e) => {
       const r = await api({ operation: "register", name: v.name });
       notice("Player registered: " + v.name);
       await loadProfiles();
-    } else if (f.id === "bid") await command({ type: "bid", bid: Number(v.bid) });
-    else if (f.id === "partners") await command({ type: "partners", ...v });
+    } else if (f.id === "bid") {
+      const h = room == null ? void 0 : room.hand, value = Number(v.bid);
+      if (!h || h.phase !== "auction" || h.turn !== uid() || f.dataset.hand !== h.id || Number(f.dataset.generation) !== h.turnGeneration || Number(f.dataset.baseBid) !== h.bid) {
+        notice("Bidding changed. Review the current bid before submitting.");
+        render();
+        return;
+      }
+      if (!Number.isInteger(value) || value <= h.bid || value > 250 || value % 5 !== 0) {
+        notice("Choose a bid from " + (h.bid + 5) + " to 250 in steps of 5.");
+        render();
+        return;
+      }
+      await command({ type: "bid", bid: value });
+    } else if (f.id === "partners") await command({ type: "partners", ...v });
     else if (f.id === "swap") await command({ type: "swap", ...v });
     else if (f.id === "deck-config") await command({ type: "config", config: { sixSuits: room.mode === 4 ? [v.six1, v.six2] : ["C", "D"], extraThree: v.extraThree } });
     else if (f.id === "reserve") await command({ type: "reserve", playerId: v.playerId });
@@ -611,7 +638,7 @@ root.addEventListener("submit", async (e) => {
   }
 });
 root.addEventListener("change", (e) => {
-  if (e.target.matches("#bid select")) root.querySelector("#bid button.gold").textContent = "Bid " + e.target.value;
+  if (e.target.matches("#bid select")) updateBidControls();
 });
 root.addEventListener("click", async (e) => {
   var _a, _b;
@@ -624,6 +651,12 @@ root.addEventListener("click", async (e) => {
     } else if (action === "resume") {
       if (!seatConnected()) await reconnectSeat();
       if (seatConnected()) await command({ type: "resume" });
+    } else if (action === "bid-max") {
+      const select = root.querySelector("#bid select");
+      if (select) {
+        select.value = "250";
+        updateBidControls();
+      }
     } else if (action === "bid-up" || action === "bid-down") {
       const select = root.querySelector("#bid select");
       if (select) {

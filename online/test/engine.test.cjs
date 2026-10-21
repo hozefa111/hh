@@ -44,9 +44,13 @@ test('sitting out survives disconnect and same-identity rejoin until admin resea
 
 test('administrator may pause/resume lobby without ending the session or dealing cards',()=>{let r=room();const totals=JSON.stringify(r.totals);r=cmd(r,'a',{type:'pause'});assert(r.paused);assert.equal(r.hand,null);assert.throws(()=>cmd(r,'a',{type:'ready'}),/paused/);assert.throws(()=>cmd(r,'bot_2',{type:'resume'}));r=cmd(r,'a',{type:'resume'});assert.equal(r.paused,false);assert.equal(JSON.stringify(r.totals),totals);r=cmd(r,'a',{type:'ready'});assert.equal(r.hand.phase,'auction');});
 
-function strategy(trick,extra={}){return {mode:4,hand:{trump:'S',bidder:'a',direct:null,partners:['b'],revealed:true,called:'AH',config:{sixSuits:['C','D'],extraThree:'H'},seatMap:['a','b','c','d'].map(uid=>({uid})),tricks:[],trick,...extra}};}
+function strategy(trick,extra={}){return {mode:4,hand:{trump:'S',bidder:'a',direct:null,partners:['b'],revealed:true,called:'3D',config:{sixSuits:['C','D'],extraThree:'H'},seatMap:['a','b','c','d'].map(uid=>({uid})),tricks:[],trick,...extra}};}
 test('normal bot takes the Heart Ace trick instead of discarding a low Heart',()=>{const r=strategy([{uid:'c',card:'7H'},{uid:'d',card:'9H'},{uid:'a',card:'KH'}],{bidder:'c',partners:['d']});assert.equal(B.chooseCard(r,'b',['AH','5H']),'AH');});
 test('normal bot wins a low-point opponent trick rather than missing it',()=>{const r=strategy([{uid:'c',card:'7H'},{uid:'d',card:'8H'},{uid:'a',card:'9H'}],{bidder:'c',partners:['d']});assert.equal(B.chooseCard(r,'b',['AH','5H']),'AH');});
 test('normal bot feeds points to its partner when partner has secured the trick',()=>{const r=strategy([{uid:'c',card:'7H'},{uid:'d',card:'9H'},{uid:'a',card:'AH'}]);assert.equal(B.chooseCard(r,'b',['KH','5H']),'KH');});
 test('normal bot protects an unsafe partner lead with its Ace before opponents play',()=>{const r=strategy([{uid:'a',card:'QH'}]);assert.equal(B.chooseCard(r,'b',['AH','5H']),'AH');});
 test('normal bot conserves its Ace when its King already beats every outstanding Heart',()=>{const r=strategy([{uid:'a',card:'9H'}],{bidder:'c',partners:['d']});assert.equal(B.chooseCard(r,'b',['AH','KH','5H']),'KH');});
+
+test('normal bot uses the cheapest winning trump to capture the 30-point three',()=>{const r=strategy([{uid:'c',card:'3S'},{uid:'d',card:'AS'},{uid:'a',card:'5S'}],{trump:'H',bidder:'c',partners:['d']});assert.equal(B.chooseCard(r,'b',['5H','AH','7C']),'5H');});
+test('normal bot does not waste trump while its partner already wins the last seat',()=>{const r=strategy([{uid:'c',card:'3S'},{uid:'d',card:'7S'},{uid:'a',card:'AS'}],{trump:'H'});assert.equal(B.chooseCard(r,'b',['AH','KH','5C']),'5C');});
+test('normal bot follows suit even when a trump would capture a valuable trick',()=>{const r=strategy([{uid:'c',card:'3S'},{uid:'d',card:'AS'},{uid:'a',card:'5S'}],{trump:'H',bidder:'c',partners:['d']});assert.equal(B.chooseCard(r,'b',['7S','AH']),'7S');});
