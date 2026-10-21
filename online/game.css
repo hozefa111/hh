@@ -24,3 +24,5 @@
 .trick-flight{position:fixed;z-index:20;display:flex;gap:5px;pointer-events:none;transform:translate(-50%,-50%)}
 .trick-flight .face{width:46px;height:68px;border-radius:7px}.trick-flight .face b{font-size:14px;top:5px;left:5px}.trick-flight .face i{font-size:27px}.trick-flight .face small{font-size:7px}
 @media(min-width:651px){.trick-flight .face{width:60px;height:88px}}
+
+.centre-trick{display:grid;grid-template-columns:repeat(2,max-content);width:max-content;gap:6px}.centre-trick[data-players="6"]{grid-template-columns:repeat(3,max-content)}.trick-flight{display:grid;grid-template-columns:repeat(var(--flight-cols,2),max-content)}
