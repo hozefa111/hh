@@ -1,0 +1,7 @@
+# v2.7.6 — bounded playing-card proportions
+
+The reported final card expanded to the entire hand-panel width because the grid always filled the panel while card height stayed fixed. Earlier viewport/overlap checks did not constrain aspect ratio or exercise every late-hand count.
+
+The hand now sizes its grid from the displayed column count and a bounded card height, with a target width of 70% of height. It is centered and capped by available panel width. One to four remaining cards use their existing compact single row; larger hands retain the complete two-row grid. Local cards stay taller than wide and never expand into a banner. Portrait card heights are 70–92 px, short-landscape heights 60–76 px; old WebViews retain fixed 70/60 px fallbacks through feature queries. Landscape corner/suit typography fits the smaller cards.
+
+The regression drives actual legal engine play and saves each remaining count, then checks all 10→1 (four seats) and 7→1 (six seats) states at six portrait/landscape/desktop viewports. It asserts bounded face dimensions, portrait aspect ratio, centered hand, no overlap/swipe/page overflow and separation from play controls. Actual Android WebView instrumentation also checks 3, 2 and 1 remaining cards in both modes. Existing gameplay, bidding, sound, animation, pause/replacement and scoring tests remain release gates. No backend/data/rule/signing changes are needed.

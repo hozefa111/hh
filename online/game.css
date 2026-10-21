@@ -70,8 +70,8 @@ main.live-main{flex:1;min-height:0;width:100%;max-width:1040px;overflow:hidden;p
 .live-main .timer{width:26px;height:26px;border-width:2px;font-size:11px;flex:none}
 .live-main .hand-hint{grid-area:hint;margin:0;text-align:center;font-size:8px;line-height:11px}
 .live-main .my-hand{grid-area:hand;overflow:visible;min-height:0;padding:4px 2px 2px;scrollbar-width:none}
-.live-main .hand-fan{display:grid;grid-template-columns:repeat(var(--hand-cols),minmax(0,1fr));gap:5px;width:min(100%,540px);min-width:0;margin:auto;align-items:stretch}
-.live-main .hand-card,.live-main .hand-card:first-child{width:100%;height:clamp(49px,9vh,80px);height:clamp(49px,9dvh,80px);min-height:0;margin:0;transform:none;border-radius:7px}
+.live-main .hand-fan{--hand-card-height:70px;--hand-card-width:calc(var(--hand-card-height) * .7);--hand-gap:5px;display:grid;grid-template-columns:repeat(var(--hand-cols),minmax(0,1fr));gap:var(--hand-gap);width:calc(var(--hand-cols) * var(--hand-card-width) + (var(--hand-cols) - 1) * var(--hand-gap));max-width:100%;min-width:0;margin:auto;align-items:stretch}
+.live-main .hand-card,.live-main .hand-card:first-child{width:100%;height:var(--hand-card-height);min-height:0;margin:0;transform:none;border-radius:7px}
 .live-main .hand-card .face{width:100%;height:100%;border-radius:7px}
 .live-main .hand-card .face b{font-size:17px;top:4px;left:5px}.live-main .hand-card .face i{font-size:28px}
 .live-main .hand-card .face small{font-size:6px;bottom:3px;right:4px}
@@ -97,8 +97,8 @@ main.live-main{flex:1;min-height:0;width:100%;max-width:1040px;overflow:hidden;p
 .drawer-top button{min-height:34px;padding:5px 12px;font-size:12px}.drawer-body{overflow:auto;min-height:0;padding:10px 14px;overscroll-behavior:contain}
 .drawer-body .panel{margin:0 0 12px;padding:12px}.drawer-body .score-row{padding:12px 0}.drawer-body .management .toolbar{display:flex;margin:12px 0}
 @media(min-height:800px){.live-main .table-seat .avatar{display:grid;width:23px;height:23px;font-size:12px;margin-bottom:1px}.live-main .table-seat{width:76px}.live-main .centre-trick .face{width:36px;height:48px}.live-main .played-card>small{max-width:36px;font-size:7px}}
-@media(max-height:620px){.live-game header{min-height:28px;padding-top:1px;padding-bottom:1px}main.live-main{gap:1px;padding:3px 8px;grid-template-rows:22px 28px auto minmax(112px,1fr) 12px 28px 10px auto 52px 26px}.live-main .hand-card,.live-main .hand-card:first-child{height:49px}.live-main .phase-area button{height:32px;min-height:32px}.live-main .phase-area input,.live-main .phase-area select{height:30px;min-height:30px}}
-@media(max-height:550px) and (orientation:landscape){main.live-main{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:'room room' 'meta meta' 'table partner' 'table hand' 'table hand' 'turn controls' 'tools tools';grid-template-rows:22px 28px 16px minmax(0,1fr) 0 52px 26px;column-gap:10px}.live-main .hand-hint{display:none}.live-main .last-trick{grid-area:turn;align-self:end;z-index:1;font-size:8px}.live-main .turn-bar{align-self:start;height:30px}.live-main .table-wrap{min-height:90px}.live-main .partner-status{font-size:8px}.live-main .hand-fan{gap:4px}.live-main .hand-card,.live-main .hand-card:first-child{height:clamp(45px,16vh,65px)}.live-main .room-head h1{font-size:11px}}
+@media(max-height:620px){.live-game header{min-height:28px;padding-top:1px;padding-bottom:1px}main.live-main{gap:1px;padding:3px 8px;grid-template-rows:22px 28px auto minmax(112px,1fr) 12px 28px 10px auto 52px 26px}.live-main .phase-area button{height:32px;min-height:32px}.live-main .phase-area input,.live-main .phase-area select{height:30px;min-height:30px}}
+@media(max-height:550px) and (orientation:landscape){main.live-main{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:'room room' 'meta meta' 'table partner' 'table hand' 'table hand' 'turn controls' 'tools tools';grid-template-rows:22px 28px 16px minmax(0,1fr) 0 52px 26px;column-gap:10px}.live-main .hand-hint{display:none}.live-main .last-trick{grid-area:turn;align-self:end;z-index:1;font-size:8px}.live-main .turn-bar{align-self:start;height:30px}.live-main .table-wrap{min-height:90px}.live-main .partner-status{font-size:8px}.live-main .hand-fan{--hand-card-height:60px;--hand-gap:4px}.live-main .hand-card .face b{font-size:13px;top:3px;left:4px}.live-main .hand-card .face i{font-size:24px}.live-main .room-head h1{font-size:11px}}
 .live-main .phase-area>.panel{padding:0;margin:0;border:0;background:none;box-shadow:none;height:100%}.live-main .phase-area h2{display:none}
 .live-main>.error{position:fixed;top:36px;left:8px;right:8px;z-index:26;background:#352420;margin:0;font-size:12px}
 .live-main .phase-area .action-bar>label{flex:1;min-width:0}.live-main .phase-area .action-bar>button{flex:1;width:auto;min-width:0}
@@ -134,3 +134,13 @@ body.live-game.bidding{--phase-height:92px}
 
 .pause-banner{max-height:calc(100vh - 60px);max-height:calc(100dvh - 60px);overflow:auto}
 .pause-actions{display:flex;gap:8px;flex-wrap:wrap}.pause-actions button{flex:1;min-width:0;font-size:12px;padding:10px}
+
+/* Keep fixed card dimensions on older WebViews; use responsive heights when supported. */
+@supports(height:clamp(70px,10vh,92px)){
+ .live-main .hand-fan{--hand-card-height:clamp(70px,10vh,92px)}
+ @media(max-height:550px) and (orientation:landscape){.live-main .hand-fan{--hand-card-height:clamp(60px,17vh,76px)}}
+}
+@supports(height:1dvh){
+ .live-main .hand-fan{--hand-card-height:clamp(70px,10dvh,92px)}
+ @media(max-height:550px) and (orientation:landscape){.live-main .hand-fan{--hand-card-height:clamp(60px,17dvh,76px)}}
+}
