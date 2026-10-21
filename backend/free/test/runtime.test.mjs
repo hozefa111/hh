@@ -13,7 +13,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
  const private_key=await exportPKCS8(privateKey),db=new Firestore(project,async()=>'owner',fetch,{origin:'http://'+emulator});
  await db.request(':commit','POST',{writes:[db.set('players/'+profile,{name:'Worker human test'},true)]});created.add('players/'+profile);await db.request(':commit','POST',{writes:[db.set('admins/'+uid,{admin:true},true)]});created.add('admins/'+uid);
  let roomId;
- const presence={},globalPresenceReads=[];let adminReads=0,identityChecks=0;
+ const presence={},globalPresenceReads=[];let adminReads=0,identityChecks=0,presenceFailures=0;const failedScans=[];
  const miniflare=new Miniflare(convertV4MiniflareOptions({name:'kali-test',modules:true,script:await readFile(new URL('../dist/worker.mjs',import.meta.url),'utf8'),compatibilityDate:'2026-03-01',
   durableObjects:{KALI_COORDINATOR:{className:'KaliCoordinator',useSQLite:true}},
   bindings:{FIREBASE_PROJECT_ID:project,FIREBASE_SERVICE_ACCOUNT:JSON.stringify({project_id:project,client_email:'test@demo-three-patti.iam.gserviceaccount.com',private_key})},
@@ -29,7 +29,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
    if(url.hostname==='identitytoolkit.googleapis.com'){identityChecks++;return Response.json({users:[{localId:uid,validSince:'0'}]});}
    if(url.hostname===project+'-default-rtdb.firebaseio.com'){
     if(request.method==='PUT')return Response.json(true);
-    if(url.pathname==='/onlinePresence.json')globalPresenceReads.push(Date.now());
+    if(url.pathname==='/onlinePresence.json'){globalPresenceReads.push(Date.now());if(presenceFailures>0){presenceFailures--;failedScans.push(Date.now());return Response.json({error:'Injected temporary presence outage'},{status:503});}}
     const match=/^\/onlinePresence\/([^/]+)\/([^/]+)\/connections\.json$/.exec(url.pathname);
     return Response.json(match?presence[match[1]]?.[match[2]]?.connections||null:presence);
    }
@@ -57,7 +57,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   for(let seat=2;seat<=6;seat++)await send({type:'bot',seat});await send({type:'ready'});
   assert(adminReads>=1);const gameAdminReads=adminReads;
   // Disconnect scanning remains authoritative while bot alarms reuse its cadence.
-  presence[roomId][uid].connections={};const pauseBy=Date.now()+10000;let paused;while(Date.now()<pauseBy){paused=await db.get('onlineState/'+roomId);if(paused.paused)break;await new Promise(r=>setTimeout(r,150));}assert(paused.paused,'A real disconnect still pauses within the scan interval');const pausedCards=JSON.stringify(paused.hand.hands);presence[roomId][uid].connections={test:true};await api({operation:'presenceSync',roomId});await send({type:'resume'});assert.equal(JSON.stringify((await db.get('onlineState/'+roomId)).hand.hands),pausedCards);
+  presenceFailures=1;presence[roomId][uid].connections={};const pauseBy=Date.now()+15000;let paused;while(Date.now()<pauseBy){paused=await db.get('onlineState/'+roomId);if(paused.paused)break;await new Promise(r=>setTimeout(r,150));}assert(paused.paused,'A real disconnect pauses after a transient presence failure recovers');assert.equal(failedScans.length,1);const afterFailure=globalPresenceReads.find(t=>t>failedScans[0]+100);assert(afterFailure-failedScans[0]>=4500,'An overdue turn cannot override server retry backoff');const pausedCards=JSON.stringify(paused.hand.hands);presence[roomId][uid].connections={test:true};await api({operation:'presenceSync',roomId});await send({type:'resume'});assert.equal(JSON.stringify((await db.get('onlineState/'+roomId)).hand.hands),pausedCards);
   let steps=0,sawBot=false,timeoutTurn=null,sawTimeout=false;
   while(true){
    assert(++steps<1000);const r=await db.get('onlineState/'+roomId);if(!R.active(r))break;
@@ -78,7 +78,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   }
   assert(sawBot);assert(sawTimeout,'Real 30-second alarm played a legal card automatically');const room=await db.get('onlineState/'+roomId);assert.equal(room.completed,1);assert.equal(Object.values(room.hand.captured).reduce((a,b)=>a+b),250);
   assert((await db.get('rounds/online_'+room.hand.id)).timestamp instanceof Date);
-  assert.equal(adminReads,gameAdminReads,'Ordinary room actions do not fetch the tracker administrator document');assert(identityChecks>10,'Account revocation checks remain on authenticated commands');for(let i=1;i<globalPresenceReads.length;i++)assert(globalPresenceReads[i]-globalPresenceReads[i-1]>=4900,'Bot alarms do not repeat global presence scans inside five seconds');
+  assert.equal(adminReads,gameAdminReads,'Ordinary room actions do not fetch the tracker administrator document');assert(identityChecks>10,'Account revocation checks remain on authenticated commands');for(let i=1;i<globalPresenceReads.length;i++)assert(globalPresenceReads[i]-globalPresenceReads[i-1]>=4500,'Bot alarms do not repeat global presence scans inside five seconds');
   await send({type:'stop'});assert.equal((await db.get('sessions/'+roomId)).status,'stopped');
   const preview=await api({operation:'sessionHistory',sessionId:roomId,action:'previewDelete',commandId:crypto.randomUUID()});assert.equal(preview.roundCount,1);
   await api({operation:'sessionHistory',sessionId:roomId,action:'delete',deleteRounds:true,previewToken:preview.previewToken,commandId:crypto.randomUUID()});

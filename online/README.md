@@ -218,3 +218,8 @@ scan presence at a five-second cadence instead of every 900 ms; no stale presenc
 snapshot is replayed between scans. Explicit presenceSync still reads the actual
 connection state, and disconnects still pause a hand. Rules/scoring/timers are
 unchanged. This reduces network round trips without weakening move validation.
+
+Server-alarm failure backoff is persisted and cannot be shortened by an overdue
+turn deadline or coordinator restart. A successful recovery clears it. Runtime
+tests inject a temporary presence-service failure, verify bounded retry rather
+than a tight loop, and reconnect/resume the exact paused hand.
