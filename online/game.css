@@ -10,3 +10,17 @@
 
 /* Room actions stay outside management and remain reachable on phones. */
 .room-actions{display:flex;flex-wrap:wrap;gap:8px}.room-head h1{overflow-wrap:anywhere}.room-code{font-variant-numeric:tabular-nums;letter-spacing:.08em}
+
+/* Fully readable cards: swipe the hand instead of stacking ranks over one another. */
+.my-hand{overflow-x:auto;overflow-y:hidden;padding:24px 8px 18px;min-height:148px;scrollbar-width:thin;scrollbar-color:#d4b95a #14251f;-webkit-overflow-scrolling:touch}
+.hand-fan{gap:9px;min-width:min-content;justify-content:flex-start}
+.hand-card,.hand-card:first-child{margin-left:0;width:68px;height:111px;flex:0 0 68px}
+.hand-card .face{width:68px;height:105px}.hand-card .face b{font-size:20px}.hand-card .face i{font-size:36px}
+.hand-card.dim{opacity:.42;filter:saturate(.45)}.hand-hint{font-size:11px;color:var(--muted);margin:18px 4px 0}
+.partner-status{display:flex;flex-direction:column;gap:5px;margin:10px 0;padding:12px 15px;border:1px solid #ddc66c44;border-radius:14px;background:#182c23;font-size:13px}
+.partner-status span{font-size:11px;color:#b6c8be}.partner-status.revealed{border-color:#66e5ad;background:#12382b}.partner-status.revealed b{color:#9ff3c7}
+.last-trick{font-size:12px;color:var(--gold);text-align:center;margin:6px 0 12px}.table-seat.trick-winner{border-color:#efcc6c;box-shadow:0 0 14px #efcc6c30}
+.trick-announcement{position:fixed;left:50%;top:78px;transform:translateX(-50%);width:max-content;max-width:92vw;z-index:21;pointer-events:none;background:#12382bf5;border:1px solid #e4c578;border-radius:15px;padding:12px 18px;color:#fff0ac;font-size:14px;font-weight:750;text-align:center;box-shadow:0 8px 24px #0008}
+.trick-flight{position:fixed;z-index:20;display:flex;gap:5px;pointer-events:none;transform:translate(-50%,-50%)}
+.trick-flight .face{width:46px;height:68px;border-radius:7px}.trick-flight .face b{font-size:14px;top:5px;left:5px}.trick-flight .face i{font-size:27px}.trick-flight .face small{font-size:7px}
+@media(min-width:651px){.trick-flight .face{width:60px;height:88px}}

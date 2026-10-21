@@ -12,7 +12,7 @@ if (emulator) {
 const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : window.KALI_API_BASE || "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
 let subscribedRoomId = null, loadingRoom = false, connectionReady = false;
 let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
-let renderFrame = null, motionQueue = [];
+let renderFrame = null, motionQueue = [], collectionUntil = 0, collectionTimer = null;
 let reduced = localStorage.getItem("kaliReducedMotion") === "true" || matchMedia("(prefers-reduced-motion: reduce)").matches;
 const esc = (v) => String(v != null ? v : "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const uid = () => user == null ? void 0 : user.uid, name = (id) => {
@@ -78,7 +78,8 @@ function header() {
   return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine ? "" : "offline"}">${!navigator.onLine ? "\u25CF RECONNECTING" : room && !connectionReady ? "\u25CB CONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
 }
 function home() {
-  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${localStorage.getItem("kaliPlayerId") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><p class="muted">Choose your existing name. The admin will approve your entry.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${busy ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house \xB7 Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${busy ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your rooms & game history</h2>${memberships.length ? memberships.map((r) => r.status === "Removed" ? `<p>${esc(r.sessionName)} \xB7 Completed rounds remain in the main History.</p>` : btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">Your joined rooms appear here.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;
+  const activeRooms = memberships.filter((r) => !["stopped", "Removed"].includes(r.status));
+  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${localStorage.getItem("kaliPlayerId") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><p class="muted">Choose your existing name. The admin will approve your entry.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${busy ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house \xB7 Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${busy ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your active rooms</h2><p class="muted">Completed sessions are in 3 Patti PRO \u2192 History \u2192 Sessions.</p>${activeRooms.length ? activeRooms.map((r) => btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">No active rooms. Create or join a table.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;
 }
 function lobby() {
   const me = room.members[uid()], isOwner = room.admin === uid(), seated = R.ordered(room), hasHand = R.active(room);
@@ -91,12 +92,52 @@ function status(p) {
   return !p.connected && p.kind !== "bot" ? "\u25CB Disconnected" : p.ready ? "\u2713 Ready" : esc(p.status);
 }
 function table() {
-  const h = room.hand, localCards = own.handId === h.id ? own.cards : [], me = room.members[uid()], mySeat = (me == null ? void 0 : me.seat) || 1, turn = h.turn === uid(), canPlay = connectionReady && navigator.onLine && turn && h.phase === "playing" && !room.paused && !busy && own.handId === h.id && own.cards.length === h.counts[uid()], legal = canPlay ? R.legal(localCards, h.trick) : [];
-  const last = h.tricks.at(-1), trick = h.trick.length ? h.trick : (last == null ? void 0 : last.cards) || [];
-  return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump ? R.NAMES[h.trump] : "Choosing"}</b></span><span>CONTRACT <b>${h.bid} \xB7 ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called ? esc(h.called.slice(0, -1)) + suit(h.called.slice(-1)) : "\u2014"}</b></span></section><div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} \xB7 TRICK ${Math.min(h.tricks.length + 1, h.mode === 4 ? 10 : 7)}</small></div>${h.seatMap.map((p) => {
+  const h = room.hand, localCards = own.handId === h.id ? own.cards : [], me = room.members[uid()], mySeat = (me == null ? void 0 : me.seat) || 1, turn = h.turn === uid(), canPlay = performance.now() >= collectionUntil && connectionReady && navigator.onLine && turn && h.phase === "playing" && !room.paused && !busy && own.handId === h.id && own.cards.length === h.counts[uid()], legal = canPlay ? R.legal(localCards, h.trick) : [];
+  const last = h.tricks.at(-1), collecting = performance.now() < collectionUntil, trick = collecting ? [] : h.trick;
+  return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump ? R.NAMES[h.trump] : "Choosing"}</b></span><span>CONTRACT <b>${h.bid} \xB7 ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called ? esc(h.called.slice(0, -1)) + suit(h.called.slice(-1)) : "\u2014"}</b></span></section>${partnerStatus(h)}<div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} \xB7 TRICK ${Math.min(h.tricks.length + 1, h.mode === 4 ? 10 : 7)}</small></div>${h.seatMap.map((p) => {
     const angle = (p.seat - mySeat + room.mode) % room.mode * 2 * Math.PI / room.mode, x = 50 - Math.sin(angle) * 40, y = 50 + Math.cos(angle) * 39;
-    return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn === p.uid ? "current" : ""} ${p.uid === uid() ? "self" : ""}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind === "bot" ? "\u265F" : esc(p.name.slice(0, 1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} \xB7 ${p.kind === "bot" ? "BOT \xB7 " : ""}${h.counts[p.uid]} cards</small><span>${room.members[p.uid].connected ? "" : "\u25CB Offline \xB7 "}${h.bidder === p.uid ? "\u265B Bidder" : h.direct === p.uid ? "Direct partner" : h.revealed && h.secret === p.uid ? "\u2726 Called partner" : ""}</span></div>`;
-  }).join("")}<div class="centre-trick ${!h.trick.length && last ? "collected" : ""}" data-trick="${h.tricks.length}">${trick.map((p) => `<div data-player="${esc(p.uid)}" class="played-card ${p.automatic ? "automatic" : ""}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason === "timeout" ? " \xB7 Timeout" : p.reason === "bot" ? " \xB7 Bot" : p.automatic ? " \xB7 Auto" : ""}</small></div>`).join("")}</div></div></div><section class="turn-bar"><span class="turn-label">${room.paused ? "Paused" : turn ? "Your turn" : esc(name(h.turn)) + "\u2019s turn"}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">\u2014</span></section>${h.revealed ? `<p class="reveal">\u2726 ${esc(name(h.secret))} holds ${esc(h.called)}${h.secret === h.direct ? " \xB7 No additional partner" : ""}</p>` : ""}<section class="my-hand" aria-label="Your cards"><div class="hand-fan">${localCards.map((c, i) => `<button class="hand-card ${legal.includes(c) ? "legal" : canPlay ? "dim" : "waiting"} ${selected === c ? "selected" : ""}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c) ? "disabled" : ""} aria-label="${esc(R.card(c).rank + " " + R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join("")}</div></section>${selected && canPlay ? `<div class="play-confirm">${btn("Play " + esc(selected), "confirm-card", false, "gold")}${btn("Cancel", "cancel-card")}</div>` : ""}${turn && connectionReady && !room.paused && own.handId === h.id ? phaseControls(h) : ""}<details class="panel auction"><summary>Bidding history \xB7 ${h.bid}</summary>${h.auction.map((a) => `<p>${esc(name(a.uid))} <b>${a.pass ? "PASS" : a.bid}</b> ${a.reason === "timeout" ? "\xB7 timeout PASS" : a.reason === "bot" ? "\xB7 computer" : a.automatic ? "\xB7 automatic" : ""}</p>`).join("")}<p>Passed: ${h.passed.map(name).map(esc).join(", ") || "None"}</p></details>`;
+    return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn === p.uid ? "current" : ""} ${p.uid === uid() ? "self" : ""} ${(last == null ? void 0 : last.winner) === p.uid ? "trick-winner" : ""}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind === "bot" ? "\u265F" : esc(p.name.slice(0, 1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} \xB7 ${p.kind === "bot" ? "BOT \xB7 " : ""}${h.counts[p.uid]} cards \xB7 ${h.tricks.filter((t) => t.winner === p.uid).length} tricks</small><span>${room.members[p.uid].connected ? "" : "\u25CB Offline \xB7 "}${h.bidder === p.uid ? "\u265B Bidder" : h.direct === p.uid ? "Direct partner" : h.revealed && h.secret === p.uid ? "\u2726 Called partner" : ""}</span></div>`;
+  }).join("")}<div class="centre-trick" data-trick="${h.tricks.length}">${trick.map((p) => `<div data-player="${esc(p.uid)}" class="played-card ${p.automatic ? "automatic" : ""}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason === "timeout" ? " \xB7 Timeout" : p.reason === "bot" ? " \xB7 Bot" : p.automatic ? " \xB7 Auto" : ""}</small></div>`).join("")}</div></div></div>${last ? `<p class="last-trick" role="status">\u2713 ${esc(name(last.winner))} won trick ${h.tricks.length} \xB7 +${last.points} captured points</p>` : ""}<section class="turn-bar"><span class="turn-label">${room.paused ? "Paused" : collecting ? "Collecting trick\u2026" : turn ? "Your turn" : esc(name(h.turn)) + "\u2019s turn"}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">\u2014</span></section><p class="hand-hint">Your cards \xB7 Swipe \u2194 to see all \xB7 Glowing cards are playable</p><section class="my-hand" aria-label="Your cards"><div class="hand-fan">${localCards.map((c, i) => `<button class="hand-card ${legal.includes(c) ? "legal" : canPlay ? "dim" : "waiting"} ${selected === c ? "selected" : ""}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c) ? "disabled" : ""} aria-label="${esc(R.card(c).rank + " " + R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join("")}</div></section>${selected && canPlay ? `<div class="play-confirm">${btn("Play " + esc(selected), "confirm-card", false, "gold")}${btn("Cancel", "cancel-card")}</div>` : ""}${turn && connectionReady && !room.paused && own.handId === h.id ? phaseControls(h) : ""}<details class="panel auction"><summary>Bidding history \xB7 ${h.bid}</summary>${h.auction.map((a) => `<p>${esc(name(a.uid))} <b>${a.pass ? "PASS" : a.bid}</b> ${a.reason === "timeout" ? "\xB7 timeout PASS" : a.reason === "bot" ? "\xB7 computer" : a.automatic ? "\xB7 automatic" : ""}</p>`).join("")}<p>Passed: ${h.passed.map(name).map(esc).join(", ") || "None"}</p></details>`;
+}
+function partnerStatus(h) {
+  if (!h.called) return "";
+  if (!h.revealed) return `<section class="partner-status secret" aria-live="polite"><b>\u2726 ${h.direct ? "Direct partner: " + esc(name(h.direct)) : "Secret partner"}</b><span>Called ${esc(h.called.slice(0, -1))}${suit(h.called.slice(-1))} \xB7 holder stays secret until this card is played</span></section>`;
+  const partners = [...new Set(h.partners || [h.direct, h.secret].filter(Boolean))];
+  return `<section class="partner-status revealed" aria-live="polite"><b>\u2726 ${h.bidder === uid() ? "Your partner" + (partners.length > 1 ? "s" : "") : "Hukum partners"}: ${partners.map(name).map(esc).join(" & ")}</b><span>${esc(name(h.secret))} played ${esc(h.called.slice(0, -1))}${suit(h.called.slice(-1))}${h.secret === h.direct ? " \xB7 Direct and called-card partner are the same player" : ""}</span></section>`;
+}
+function clearCollection() {
+  clearTimeout(collectionTimer);
+  collectionTimer = null;
+  collectionUntil = 0;
+  document.querySelectorAll(".trick-flight,.trick-announcement").forEach((el) => el.remove());
+}
+function collectTrick(trick) {
+  clearCollection();
+  if (!trick || document.hidden) return;
+  const felt = document.querySelector(".felt"), seat = document.querySelector('.table-seat[data-player="' + CSS.escape(trick.winner) + '"]');
+  if (!felt || !seat) return;
+  const area = felt.getBoundingClientRect(), target = seat.getBoundingClientRect(), duration = reduced ? 300 : 850;
+  collectionUntil = performance.now() + duration;
+  const announcement = document.createElement("div");
+  announcement.className = "trick-announcement";
+  announcement.setAttribute("role", "status");
+  announcement.textContent = name(trick.winner) + " won the trick \xB7 +" + trick.points + " captured points";
+  document.body.appendChild(announcement);
+  if (!reduced) {
+    const flight = document.createElement("div");
+    flight.className = "trick-flight";
+    flight.dataset.winner = trick.winner;
+    flight.style.left = area.x + area.width / 2 + "px";
+    flight.style.top = area.y + area.height / 2 + "px";
+    flight.innerHTML = trick.cards.map((p, i) => `<div class="flight-card" style="--flight-index:${i};--flight-count:${trick.cards.length}">${cardHTML(p.card)}</div>`).join("");
+    document.body.appendChild(flight);
+    const dx = target.x + target.width / 2 - area.x - area.width / 2, dy = target.y + target.height / 2 - area.y - area.height / 2;
+    flight.animate([{ transform: "translate(-50%,-50%) scale(1)", opacity: 1 }, { transform: "translate(-50%,-50%) scale(1.05)", opacity: 1, offset: 0.22 }, { transform: "translate(calc(-50% + " + dx + "px),calc(-50% + " + dy + "px)) scale(.2)", opacity: 0 }], { duration: 800, easing: "ease-in-out", fill: "forwards" });
+  }
+  collectionTimer = setTimeout(() => {
+    clearCollection();
+    render();
+  }, duration);
 }
 function phaseControls(h) {
   if (h.phase === "auction") return `<form id="bid" class="action-bar"><label>Raise<select name="bid">${Array.from({ length: Math.max(0, (250 - h.bid) / 5) }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button class="gold" ${h.bid >= 250 || busy ? "disabled" : ""}>Raise</button>${btn("PASS", "pass")}</form>`;
@@ -128,12 +169,12 @@ function render() {
   renderFrame = requestAnimationFrame(renderNow);
 }
 function renderNow() {
-  var _a, _b, _c, _d;
+  var _a, _b, _c, _d, _e;
   renderFrame = null;
   root.dataset.revision = (_a = room == null ? void 0 : room.revision) != null ? _a : "";
-  const scroll = window.scrollY;
+  const scroll = window.scrollY, handScroll = ((_b = root.querySelector(".my-hand")) == null ? void 0 : _b.scrollLeft) || 0;
   const drafts = Array.from(root.querySelectorAll("form")).map((f) => ({ id: f.id, target: f.dataset.target, values: Array.from(f.querySelectorAll("input,select")).map((i) => ({ name: i.name, value: i.value })) }));
-  const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_b = focus.form) == null ? void 0 : _b.id, start: focus.selectionStart } : null;
+  const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_c = focus.form) == null ? void 0 : _c.id, start: focus.selectionStart } : null;
   document.body.classList.toggle("reduced", reduced);
   root.innerHTML = header() + `<main>${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main><footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`;
   for (const draft of drafts) {
@@ -155,9 +196,11 @@ function renderNow() {
   }
   if (window.KALI_NATIVE_PENDING) root.querySelectorAll("button").forEach((b) => b.disabled = true);
   window.scrollTo(0, scroll);
+  const hand = root.querySelector(".my-hand");
+  if (hand) hand.scrollLeft = handScroll;
   tick();
   if (!reduced) for (const kind of motionQueue.splice(0)) {
-    if (kind === "deal" && !document.querySelector(".hand-card") && ((_c = room == null ? void 0 : room.hand) == null ? void 0 : _c.seatMap.some((p) => p.uid === uid()))) {
+    if (kind === "deal" && !document.querySelector(".hand-card") && ((_d = room == null ? void 0 : room.hand) == null ? void 0 : _d.seatMap.some((p) => p.uid === uid()))) {
       motionQueue.push("deal");
       continue;
     }
@@ -188,8 +231,7 @@ function renderNow() {
         c.animate([{ transform: "translate(" + (a.x + a.width / 2 - b.x - b.width / 2) + "px," + (a.y + a.height / 2 - b.y - b.height / 2) + "px) scale(.6)", opacity: 0.2 }, { transform: "translate(0,0) scale(1)", opacity: 1 }], { duration: 300, easing: "ease-out" });
       }
     }
-    if (kind === "trick") document.querySelectorAll(".centre-trick .played-card").forEach((c) => c.animate([{ filter: "brightness(1)" }, { filter: "brightness(1.4)", transform: "translateY(-5px)" }, { filter: "brightness(1)" }], { duration: 650 }));
-    if (kind === "trump" || kind === "reveal") (_d = document.querySelector(kind === "trump" ? ".game-meta" : ".reveal")) == null ? void 0 : _d.animate([{ opacity: 0.2, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }], { duration: 400 });
+    if (kind === "trump" || kind === "reveal") (_e = document.querySelector(kind === "trump" ? ".game-meta" : ".partner-status")) == null ? void 0 : _e.animate([{ opacity: 0.2, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }], { duration: 400 });
   }
   else motionQueue = [];
 }
@@ -229,6 +271,7 @@ async function attachPresence(id) {
   unsubs.push(() => connected.off("value", cb));
 }
 async function enter(id) {
+  clearCollection();
   connectionReady = false;
   loadingRoom = true;
   room = null;
@@ -262,8 +305,11 @@ async function enter(id) {
     if (((_a = previous == null ? void 0 : previous.hand) == null ? void 0 : _a.id) !== ((_b = next.hand) == null ? void 0 : _b.id)) selected = null;
     if (previous && previous.id === next.id) {
       if (((_c = previous.hand) == null ? void 0 : _c.turnGeneration) !== ((_d = next.hand) == null ? void 0 : _d.turnGeneration)) selected = null;
-      if (((_e = previous.hand) == null ? void 0 : _e.id) !== ((_f = next.hand) == null ? void 0 : _f.id)) motionQueue.push("deal");
-      else if (((_g = next.hand) == null ? void 0 : _g.phase) === "playing" && Object.values(((_h = previous.hand) == null ? void 0 : _h.counts) || {}).reduce((a, b) => a + b, 0) > Object.values(next.hand.counts).reduce((a, b) => a + b, 0)) motionQueue.push(next.hand.tricks.length > previous.hand.tricks.length ? "trick" : "card");
+      if (((_e = previous.hand) == null ? void 0 : _e.id) !== ((_f = next.hand) == null ? void 0 : _f.id)) {
+        clearCollection();
+        motionQueue.push("deal");
+      } else if (next.hand && next.hand.tricks.length > previous.hand.tricks.length) collectTrick(next.hand.tricks.at(-1));
+      else if (((_g = next.hand) == null ? void 0 : _g.phase) === "playing" && Object.values(((_h = previous.hand) == null ? void 0 : _h.counts) || {}).reduce((a, b) => a + b, 0) > Object.values(next.hand.counts).reduce((a, b) => a + b, 0)) motionQueue.push("card");
       if (!((_i = previous.hand) == null ? void 0 : _i.trump) && ((_j = next.hand) == null ? void 0 : _j.trump)) motionQueue.push("trump");
       if (!((_k = previous.hand) == null ? void 0 : _k.revealed) && ((_l = next.hand) == null ? void 0 : _l.revealed)) motionQueue.push("reveal");
     }
@@ -339,10 +385,12 @@ root.addEventListener("click", async (e) => {
   try {
     if (action === "motion") {
       reduced = !reduced;
+      if (reduced) clearCollection();
       localStorage.setItem("kaliReducedMotion", reduced);
       render();
     } else if (action === "room") await enter(arg);
     else if (action === "home") {
+      clearCollection();
       subscribedRoomId = null;
       room = null;
       own = { cards: [] };
@@ -420,6 +468,7 @@ async function loadProfiles() {
 let membershipUnsub = null;
 auth.onAuthStateChanged(async (current) => {
   if (user && user.uid !== (current == null ? void 0 : current.uid)) {
+    clearCollection();
     unsubs.forEach((f) => f());
     unsubs = [];
     room = null;
@@ -454,6 +503,10 @@ auth.onAuthStateChanged(async (current) => {
     error = e.message;
   }
   render();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearCollection();
+  else render();
 });
 window.addEventListener("online", render);
 window.addEventListener("offline", render);
