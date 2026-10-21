@@ -158,3 +158,9 @@ body.live-game.bidding{--phase-height:92px}
 .game-dialog h2{margin:10px 0;font-size:24px}.game-dialog p{font-size:13px;color:#c9d7cc;line-height:1.5}
 .game-dialog input{width:100%;font-size:16px}.game-dialog-actions{display:grid;gap:10px;margin-top:20px}.game-dialog-actions button{text-align:left;white-space:normal;width:100%;min-height:48px;transform:none}.game-dialog-actions b{display:block;font-size:14px}.game-dialog-actions small{display:block;font-size:11px;line-height:1.4;margin-top:4px;color:inherit;opacity:.85}
 @media(max-height:450px){.game-dialog{padding:14px;max-width:560px}.game-dialog h2{font-size:19px;margin:5px 0}.game-dialog-actions{margin-top:10px;gap:6px}.game-dialog-actions button{padding:8px 12px}.game-dialog p{margin:6px 0}}
+
+/* Float decorative home cards without animating layout margins. */
+.hero-cards .face{--hero-tilt:0deg;--hero-x:0px;--hero-y:-12px}
+.hero-cards .face:first-child{--hero-tilt:-18deg;--hero-x:10px;--hero-y:0px}
+.hero-cards .face:last-child{--hero-tilt:18deg;--hero-x:-10px;--hero-y:0px}
+@keyframes heroFloat{0%,100%{transform:translateY(var(--hero-y)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}50%{transform:translateY(calc(var(--hero-y) - 8px)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}}
