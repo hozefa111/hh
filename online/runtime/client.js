@@ -577,7 +577,15 @@ async function enter(id) {
     if (((_a = previous == null ? void 0 : previous.hand) == null ? void 0 : _a.id) !== ((_b = next.hand) == null ? void 0 : _b.id)) selected = null;
     if (previous && previous.id === next.id) {
       if (((_c = previous.hand) == null ? void 0 : _c.turnGeneration) !== ((_d = next.hand) == null ? void 0 : _d.turnGeneration)) selected = null;
+      if (!previous.paused && next.paused && R.active(next)) {
+        screen = "room";
+        scoreOpen = false;
+        historyOpen = false;
+      }
       if (((_e = previous.hand) == null ? void 0 : _e.id) !== ((_f = next.hand) == null ? void 0 : _f.id)) {
+        screen = "room";
+        scoreOpen = false;
+        historyOpen = false;
         clearCollection();
         motionQueue.push("deal");
         playSound("deal");

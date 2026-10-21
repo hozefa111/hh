@@ -173,7 +173,8 @@ function roomReadError(id,e){if(e.code==='permission-denied'||e.code==='not-foun
 async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;
  unsubs.push(db.doc('onlineRooms/'+id).onSnapshot(s=>{if(subscribedRoomId!==id)return;if(!s.exists){unavailableRoom(id);return;}loadingRoom=false;const next=s.data();if(previous?.hand?.id!==next.hand?.id)selected=null;if(previous&&previous.id===next.id){
  if(previous.hand?.turnGeneration!==next.hand?.turnGeneration)selected=null;
- if(previous.hand?.id!==next.hand?.id){clearCollection();motionQueue.push('deal');playSound('deal');}
+ if(!previous.paused&&next.paused&&R.active(next)){screen='room';scoreOpen=false;historyOpen=false;}
+ if(previous.hand?.id!==next.hand?.id){screen='room';scoreOpen=false;historyOpen=false;clearCollection();motionQueue.push('deal');playSound('deal');}
  else if(next.hand&&next.hand.tricks.length>previous.hand.tricks.length)collectTrick(next.hand.tricks.at(-1));
  else if(next.hand?.phase==='playing'&&Object.values(previous.hand?.counts||{}).reduce((a,b)=>a+b,0)>Object.values(next.hand.counts).reduce((a,b)=>a+b,0)){motionQueue.push('card');playSound('card');}
  if(!previous.hand?.trump&&next.hand?.trump){motionQueue.push('trump');playSound('trump');}
