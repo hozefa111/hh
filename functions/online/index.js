@@ -93,6 +93,12 @@ exports.kaliApi=onRequest({region,cors:['https://hozefa111.github.io','https://p
  try{if(req.method!=='POST'){res.status(405).json({error:'POST required'});return;}const who=await identity(req);await rate(who.uid);const body=req.body||{};let result;
   if(body.operation==='create')result=await service.create(who,body);
   else if(body.operation==='sessionHistory')result=await service.history(who,body);
+  else if(body.operation==='presenceSync'){
+   if(!/^[a-zA-Z0-9_-]{1,100}$/.test(body.roomId||''))throw new Error('Invalid room');
+   if(!(await publicRef(body.roomId).collection('members').doc(who.uid).get()).exists)throw new Error('Room admission required');
+   const connections=await realtime('/onlinePresence/'+body.roomId+'/'+who.uid+'/connections'),connected=Object.keys(connections||{}).length>0;
+   await service.presence(body.roomId,who.uid,connected);result={connected};
+  }
   else if(body.operation==='presenceAccess'){await grantPresence(body.roomId,who.uid);result={ok:true};}
   else if(body.operation==='register'){
    if(!who.admin)throw new Error('Admin access required');const name=String(body.name||'').trim();if(!name||name.length>60)throw new Error('Invalid name');const ref=db.collection('players').doc();await ref.set({name,active:true,createdAt:FieldValue.serverTimestamp()});result={playerId:ref.id};

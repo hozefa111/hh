@@ -63,6 +63,13 @@ export class KaliCoordinator extends DurableObject {
     if(body.operation==='create')result=await this.service.create(who,body);
     else if(body.operation==='sessionHistory')result=await this.service.history(who,body);
     else if(body.operation==='clock')result={serverNow:Date.now()};
+    else if(body.operation==='presenceSync'){
+     if(!/^[a-zA-Z0-9_-]{1,100}$/.test(body.roomId||''))throw Error('Invalid room');
+     if(!await this.db.get('onlineRooms/'+body.roomId+'/members/'+who.uid))throw Error('Room admission required');
+     const connections=await this.realtime('/onlinePresence/'+body.roomId+'/'+who.uid+'/connections');
+     const connected=Object.keys(connections||{}).length>0;
+     await this.service.presence(body.roomId,who.uid,connected);result={connected};
+    }
     else if(body.operation==='presenceAccess'){
      if(!/^[a-zA-Z0-9_-]{1,100}$/.test(body.roomId||''))throw Error('Invalid room');
      if(!await this.db.get('onlineRooms/'+body.roomId+'/members/'+who.uid))throw Error('Room admission required');

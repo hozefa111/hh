@@ -29,7 +29,8 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
    if(url.hostname==='identitytoolkit.googleapis.com')return Response.json({users:[{localId:uid,validSince:'0'}]});
    if(url.hostname===project+'-default-rtdb.firebaseio.com'){
     if(request.method==='PUT')return Response.json(true);
-    return Response.json(presence);
+    const match=/^\/onlinePresence\/([^/]+)\/([^/]+)\/connections\.json$/.exec(url.pathname);
+    return Response.json(match?presence[match[1]]?.[match[2]]?.connections||null:presence);
    }
    throw Error('Unexpected network request in isolated runtime test');
   }
@@ -46,6 +47,11 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   const replay=await miniflare.dispatchFetch('http://worker/kaliConsumeExchange',{method:'POST',body:JSON.stringify({exchange})});assert.equal(replay.status,400);
   ({roomId}=await api({operation:'create',playerId:profile,mode:6}));presence[roomId]={[uid]:{connections:{test:true}}};
   await api({operation:'presenceAccess',roomId});
+  assert.equal((await api({operation:'presenceSync',roomId})).connected,true);
+  presence[roomId][uid].connections={};assert.equal((await api({operation:'presenceSync',roomId,connected:true})).connected,false);
+  assert.equal((await db.get('onlineState/'+roomId)).members[uid].connected,false);
+  presence[roomId][uid].connections={test:true};assert.equal((await api({operation:'presenceSync',roomId})).connected,true);
+  assert.equal((await db.get('onlineState/'+roomId)).members[uid].connected,true);
   const send=async action=>{const r=await db.get('onlineState/'+roomId);return api({roomId,commandId:crypto.randomUUID(),revision:r.revision,handId:r.hand?.id,turnGeneration:r.hand?.turnGeneration,action});};
   for(let seat=2;seat<=6;seat++)await send({type:'bot',seat});await send({type:'ready'});
   let steps=0,sawBot=false,timeoutTurn=null,sawTimeout=false;

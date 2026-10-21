@@ -7,7 +7,7 @@ firebase.initializeApp(config);const auth=firebase.auth(),db=firebase.firestore(
 if(emulator){auth.useEmulator('http://'+(window.KALI_HOST||location.hostname)+':9099',{disableWarnings:true});db.useEmulator(window.KALI_HOST||location.hostname,8080);presence.useEmulator(window.KALI_HOST||location.hostname,9000);}
 // Memory-only Firestore cache: private hands never enter persistent offline storage.
 const host=emulator?'http://'+(window.KALI_HOST||location.hostname)+':5001/'+config.projectId+'/asia-south1/':(window.KALI_API_BASE||'https://asia-south1-'+config.projectId+'.cloudfunctions.net/');
-let subscribedRoomId=null,loadingRoom=false,connectionReady=false;
+let subscribedRoomId=null,loadingRoom=false,connectionReady=false,presenceRecovery=null;
 let user=null,admin=false,room=null,own={cards:[]},profiles=[],memberships=[],unsubs=[],connection=null,clockAnchor={server:Date.now(),mono:performance.now()},busy=false,selected=null,previous=null,scoreOpen=false,historyOpen=false,historyMore=true,records=[],error='',screen='home';
 let renderFrame=null,motionQueue=[],collectionUntil=0,collectionTimer=null,pendingCollection=null;
 let reduced=localStorage.getItem('kaliReducedMotion')==='true'||matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -26,7 +26,7 @@ async function api(body,endpoint='kaliApi'){
 }
 
 async function command(action){if(!room||busy)return;if(!navigator.onLine){notice('Offline. Reconnect to continue.');return;}busy=true;root.querySelectorAll('button').forEach(b=>b.disabled=true);render();const body={roomId:room.id,revision:room.revision,handId:room.hand?.id,turnGeneration:room.hand?.turnGeneration,commandId:crypto.randomUUID(),action};try{await api(body);}catch(e){notice(e.message);}finally{busy=false;render();}}
-function header(){return `<header><a href="../index.html" class="brand">♠ <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine?'':'offline'}">${!navigator.onLine?'● RECONNECTING':room&&!connectionReady?'○ CONNECTING':'● ONLINE'}</span>${room?btn('Rooms','home',false,'quiet'):''}${btn(reduced?'Motion off':'Motion on','motion',false,'quiet')}</header>`;}
+function header(){return `<header><a href="../index.html" class="brand">♠ <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine?'':'offline'}">${!navigator.onLine?'● RECONNECTING':room&&(!connectionReady||room.members[uid()]?.connected===false)?'○ RECONNECTING':'● ONLINE'}</span>${room?btn('Rooms','home',false,'quiet'):''}${btn(reduced?'Motion off':'Motion on','motion',false,'quiet')}</header>`;}
 function home(){const activeRooms=memberships.filter(r=>!['stopped','Removed'].includes(r.status));return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML('AS')}${cardHTML('3S')}${cardHTML('AH')}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map(p=>`<option value="${esc(p.id)}" ${localStorage.getItem('kaliPlayerId')===p.id?'selected':''}>${esc(p.name)}</option>`).join('')}</select></label><p class="muted">Choose your existing name. The admin will approve your entry.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get('join')||'')}" autocapitalize="characters"></label><button class="gold" ${busy?'disabled':''}>Join game →</button></form>${admin?`<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house · Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join('')}</select></label><label>Players<select name="mode"><option value="4">4 players · 40 cards</option><option value="6">6 players · 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map(s=>`<option ${s==='C'?'selected':''} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join('')}</select></label><label>Second six<select name="six2">${R.SUITS.map(s=>`<option ${s==='D'?'selected':''} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join('')}</select></label><label>Additional three<select name="extraThree">${['H','C','D'].map(s=>`<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join('')}</select></label></details><button class="gold" ${busy?'disabled':''}>Create room</button></form>`:location.hostname==='appassets.androidplatform.net'?(window.KALI_NATIVE_PENDING?`<section class="panel"><h2>Restoring your 3 Patti PRO identity…</h2><p>Your account and seats stay linked to this APK.</p></section>`:`<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home →</a></section>`):`<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your active rooms</h2><p class="muted">Completed sessions are in 3 Patti PRO → History → Sessions.</p>${activeRooms.length?activeRooms.map(r=>btn(`${esc(r.sessionName)} · ${esc(r.status)}`,'room:'+r.roomId,false,'room-link')).join(''):'<p class="muted">No active rooms. Create or join a table.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3♠ = 30. All cards total 250. 3♠ can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2×bid, distinct partners +bid, opponents 0. Loss: bidder −bid, partners −rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;}
 function lobby(){const me=room.members[uid()],isOwner=room.admin===uid(),seated=R.ordered(room),hasHand=R.active(room);return `<section class="room-head ${hasHand?'live':''}"><div><span class="eyebrow">${room.mode} PLAYERS · 250 POINTS</span><h1>${esc(room.sessionName||'Table '+room.code)}</h1><p class="room-code">Room ${esc(room.code)}</p><p>Clockwise seats · ${room.status==='stopped'?'Session complete':'Session stays open until admin stops it'}</p></div><div class="room-actions">${btn('↗ Invite','share',false,'gold')}${isOwner&&room.status!=='stopped'?btn('Stop Session','stop',false,'danger'):''}</div></section>${hasHand?table():`<div class="lobby-seats">${Array.from({length:room.mode},(_,i)=>{const p=seated.find(p=>p.seat===i+1);return `<article class="seat-card ${p?.uid===uid()?'self':''}"><span class="seat-number">SEAT ${i+1}</span><div class="avatar">${p?.kind==='bot'?'♟':esc((p?.name||'?').slice(0,1).toUpperCase())}</div><h3>${esc(p?.name||'Empty seat')}</h3><span class="badge">${p?(p.kind==='bot'?'COMPUTER':'HUMAN'):'OPEN'}</span><p>${p?status(p):'Ready for a player'}</p>${!p&&isOwner&&room.status!=='stopped'?btn('+ Computer','bot:'+ (i+1)):''}</article>`;}).join('')}</div>`}${room.lastResult&&!hasHand?results():''}${room.status==='stopped'?`<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>`:!hasHand?`<section class="ready-bar"><p>${R.allReadyExceptAdmin(room)?'Waiting for Admin to start next hand.':'Review your result, then mark Ready.'}</p>${me?.seat!==null&&me?.approved?btn(isOwner?(room.startedAt?'READY · Deal next hand':'READY · Start session'):me.ready?'✓ Ready':'I am READY','ready',!connectionReady||(isOwner?!R.allReadyExceptAdmin(room):me.ready),'gold'): '<p class="muted">Waiting for admin approval and a seat.</p>'}</section>`:''}<div class="toolbar">${btn('Session scores','scores')}${btn('Hand history','history')}${isOwner?btn('Manage table','manage')+btn('Rename session','rename-session'):btn('Leave room','leave',room.status==='stopped')}</div>${scoreOpen?`<section class="panel"><h2>Current session · starts from zero</h2>${scoreboard()}</section>`:''}${historyOpen?history():''}${isOwner&&screen==='manage'?management():''}${room.paused?`<section class="pause-banner"><h2>Ⅱ Game paused</h2><p>${room.pauseReason==='disconnected'?'A player disconnected. Cards and time remaining are preserved.':'Admin paused the table.'}</p>${isOwner?btn('Resume game','resume'):''}</section>`:''}`;}
 function status(p){return !p.connected&&p.kind!=='bot'?'○ Disconnected':p.ready?'✓ Ready':esc(p.status);}
@@ -86,11 +86,37 @@ if(!reduced)for(const kind of motionQueue.splice(0)){
 function tick(){const el=document.getElementById('countdown');if(!el||!room?.hand)return;const h=room.hand,seconds=h.deadline===null?null:Math.max(0,Math.ceil((h.deadline-(clockAnchor.server+performance.now()-clockAnchor.mono))/1000));el.textContent=room.paused?'Ⅱ':room.members[h.turn]?.kind==='bot'?'…':seconds===null?'—':seconds+'s';el.classList.toggle('urgent',room.members[h.turn]?.kind!=='bot'&&seconds!==null&&seconds<=5);el.style.setProperty('--time',Math.min(100,(seconds||0)/30*100)+'%');}
 setInterval(tick,250);
 async function attachPresence(id){
- if(connection){await connection.remove().catch(()=>{});connection=null;}
- const connected=presence.ref('.info/connected');const cb=connected.on('value',async s=>{
-  if(subscribedRoomId!==id)return;connectionReady=false;render();if(!s.val()||!user)return;
-  try{const ref=presence.ref('onlinePresence/'+id+'/'+uid()+'/connections').push();await ref.onDisconnect().remove();await ref.set(true);connection=ref;connectionReady=true;render();}catch(e){notice('Presence connection unavailable. Reopen your room to retry.');}
- });unsubs.push(()=>connected.off('value',cb));
+ const owner=uid(),ctx={active:true,transport:false,epoch:0,pending:false,ref:null,retry:null,failures:0,access:false};
+ const valid=epoch=>ctx.active&&subscribedRoomId===id&&uid()===owner&&ctx.epoch===epoch;
+ const connected=presence.ref('.info/connected'),ownConnections=presence.ref('onlinePresence/'+id+'/'+owner+'/connections');let onOwn=null;
+ function watchOwn(snapshot){if(ctx.active&&ctx.ref&&!ctx.pending&&!snapshot.hasChild(ctx.ref.key)){connectionReady=false;render();retry();}}
+ function retry(){if(!ctx.active||ctx.retry||(!ctx.transport&&ctx.access))return;ctx.retry=setTimeout(()=>{ctx.retry=null;repair();},Math.min(10000,1000*2**Math.min(ctx.failures++,4)));}
+ async function repair(){
+  if(!ctx.active||ctx.pending||!navigator.onLine||ctx.access&&!ctx.transport)return;
+  const epoch=ctx.epoch,ref=ctx.ref||ownConnections.push();ctx.ref=ref;ctx.pending=true;
+  try{
+   if(!ctx.access){await api({operation:'presenceAccess',roomId:id});if(!valid(epoch))return;ctx.access=true;}
+   if(!onOwn)onOwn=ownConnections.on('value',watchOwn,()=>{if(ctx.active){onOwn=null;ctx.access=false;connectionReady=false;render();retry();}});
+   if(!ctx.transport)return;
+   await ref.onDisconnect().remove();if(!valid(epoch))return;
+   await ref.set(true);if(!valid(epoch))return;
+   const result=await api({operation:'presenceSync',roomId:id});if(!valid(epoch))return;
+   if(!result.connected)throw Error('Presence acknowledgement pending');
+   connection=ref;connectionReady=true;ctx.failures=0;if(ctx.retry){clearTimeout(ctx.retry);ctx.retry=null;}render();
+  }catch(e){if(valid(epoch)){connectionReady=false;render();retry();}}
+  finally{
+   ctx.pending=false;
+   if(!valid(epoch)){ref.remove().catch(()=>{});if(ctx.active&&ctx.transport)retry();}
+  }
+ }
+ const onTransport=connected.on('value',snapshot=>{
+  if(!ctx.active)return;const wasConnected=ctx.transport;ctx.transport=snapshot.val()===true;
+  if(!ctx.transport){if(wasConnected){ctx.epoch++;ctx.ref=null;connection=null;}connectionReady=false;render();}
+  else repair();
+ });
+ // A real data subscription keeps the RTDB transport active and detects lost registrations.
+ presenceRecovery=repair;repair();
+ unsubs.push(()=>{ctx.active=false;ctx.epoch++;clearTimeout(ctx.retry);connected.off('value',onTransport);if(onOwn)ownConnections.off('value',onOwn);if(ctx.ref)ctx.ref.remove().catch(()=>{});if(presenceRecovery===repair)presenceRecovery=null;});
 }
 
 async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){await connection.remove().catch(()=>{});connection=null;}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;
@@ -101,10 +127,10 @@ async function enter(id){clearCollection();connectionReady=false;loadingRoom=tru
  else if(next.hand?.phase==='playing'&&Object.values(previous.hand?.counts||{}).reduce((a,b)=>a+b,0)>Object.values(next.hand.counts).reduce((a,b)=>a+b,0))motionQueue.push('card');
  if(!previous.hand?.trump&&next.hand?.trump)motionQueue.push('trump');
  if(!previous.hand?.revealed&&next.hand?.revealed)motionQueue.push('reveal');
-}room=next;previous=next;render();},e=>{loadingRoom=false;error=e.message;render();}));
+}room=next;previous=next;if(room.members[uid()]?.connected===false)presenceRecovery?.();render();},e=>{loadingRoom=false;error=e.message;render();}));
  unsubs.push(db.doc('onlineRooms/'+id+'/private/'+uid()).onSnapshot(s=>{if(subscribedRoomId!==id)return;own=s.exists?s.data():{cards:[]};render();},e=>notice(e.message)));
  unsubs.push(db.collection('onlineRooms/'+id+'/hands').orderBy('handNumber','desc').limit(25).onSnapshot(s=>{if(subscribedRoomId!==id)return;const combined=new Map(records.map(r=>[r.handId,r]));for(const d of s.docs)combined.set(d.id,d.data());records=[...combined.values()].sort((a,b)=>b.handNumber-a.handNumber);if(s.size<25)historyMore=false;if(historyOpen)render();}));
- await api({operation:'presenceAccess',roomId:id});await attachPresence(id);localStorage.setItem('kaliRoom',id);
+ await attachPresence(id);localStorage.setItem('kaliRoom',id);
 }
 root.addEventListener('submit',async e=>{e.preventDefault();if(busy)return;const f=e.target,v=Object.fromEntries(new FormData(f));try{
  if(f.id==='join'){busy=true;root.querySelectorAll('button').forEach(b=>b.disabled=true);render();if(!user)await auth.signInAnonymously();localStorage.setItem('kaliPlayerId',v.playerId);busy=true;render();const r=await api({code:v.code,commandId:crypto.randomUUID(),action:{type:'join',playerId:v.playerId}});await enter(r.roomId);}
@@ -145,8 +171,9 @@ root.addEventListener('click',async e=>{const target=e.target.closest('[data-act
 async function loadProfiles(){profiles=(await db.collection('players').get()).docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.name).localeCompare(String(b.name)));render();}
 let membershipUnsub=null;
 auth.onAuthStateChanged(async current=>{if(user&&user.uid!==current?.uid){clearCollection();unsubs.forEach(f=>f());unsubs=[];room=null;own={cards:[]};memberships=[];subscribedRoomId=null;loadingRoom=false;if(connection){connection.remove().catch(()=>{});connection=null;}presence.goOffline();presence.goOnline();}user=current;admin=false;if(membershipUnsub)membershipUnsub();try{if(user){const token=await user.getIdTokenResult();const role=await db.doc('admins/'+user.uid).get();admin=token.claims.admin===true||role.exists;membershipUnsub=db.collection('onlineMemberships/'+user.uid+'/rooms').onSnapshot(s=>{memberships=s.docs.map(d=>d.data());if(!room)render();});}await loadProfiles();if(user)await api({operation:'clock'});}catch(e){error=e.message;}render();});
-document.addEventListener('visibilitychange',()=>{if(document.hidden)clearCollection();else render();});
-window.addEventListener('online',render);window.addEventListener('offline',render);
+window.kaliReconnect=()=>{presenceRecovery?.();render();};
+document.addEventListener('visibilitychange',()=>{if(document.hidden)clearCollection();else window.kaliReconnect();});
+window.addEventListener('online',window.kaliReconnect);window.addEventListener('offline',()=>{connectionReady=false;render();});
 // Native injects only an expiring one-use exchange after this document has loaded.
 window.kaliAcceptExchange=async exchange=>{try{const result=await api({exchange},'kaliConsumeExchange');await auth.signInWithCustomToken(result.token);window.KALI_NATIVE_PENDING=false;render();return auth.currentUser.uid;}catch(e){notice(e.message);throw e;}};
 render();
