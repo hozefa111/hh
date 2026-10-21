@@ -76,7 +76,7 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
  A.equal((await db.doc('onlineState/'+six.roomId).get()).data().sessionName,'Renamed from History');
  const archive=await issue(owner,{operation:'create',playerId:'online_admin',mode:4,sessionName:'Delete summary fixture'});await send(owner,archive.roomId,{type:'stop'});await tracker.waitForFunction(id=>sessions.some(s=>s.id===id&&s.endTime),archive.roomId);
  const roundsBefore=(await db.collection('rounds').get()).docs.map(d=>({id:d.id,...d.data()}));
- await tracker.evaluate(async id=>{const session=sessions.find(s=>s.id===id);await onlineSessionHistory(session,'delete');},archive.roomId);
+ await tracker.locator('[onclick="event.stopPropagation(); deleteSession(\''+archive.roomId+'\')"]').click();A((await tracker.locator('#confirm-modal-msg').textContent()).includes('Saved rounds and lifetime scores will stay'));await tracker.locator('#confirm-modal-ok').click();await waitFor(async()=>!(await db.doc('sessions/'+archive.roomId).get()).exists,'outer History delete confirmation');
  A(!(await db.doc('sessions/'+archive.roomId).get()).exists);A.deepEqual((await db.collection('rounds').get()).docs.map(d=>({id:d.id,...d.data()})),roundsBefore);
  report.checks.push('outer History online rename synchronizes room, and metadata deletion preserves every manual/online round');await tracker.close();
  A.equal(report.errors.length,0,JSON.stringify(report.errors));console.log(JSON.stringify(report,null,2));
