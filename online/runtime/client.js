@@ -10,7 +10,7 @@ if (emulator) {
   presence.useEmulator(window.KALI_HOST || location.hostname, 9e3);
 }
 const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":5001/" + config.projectId + "/asia-south1/" : window.KALI_API_BASE || "https://asia-south1-" + config.projectId + ".cloudfunctions.net/";
-let subscribedRoomId = null, loadingRoom = false, connectionReady = false;
+let subscribedRoomId = null, loadingRoom = false, connectionReady = false, presenceRecovery = null;
 let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
 let renderFrame = null, motionQueue = [], collectionUntil = 0, collectionTimer = null, pendingCollection = null;
 let reduced = localStorage.getItem("kaliReducedMotion") === "true" || matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -75,7 +75,8 @@ async function command(action) {
   }
 }
 function header() {
-  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine ? "" : "offline"}">${!navigator.onLine ? "\u25CF RECONNECTING" : room && !connectionReady ? "\u25CB CONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
+  var _a;
+  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine ? "" : "offline"}">${!navigator.onLine ? "\u25CF RECONNECTING" : room && (!connectionReady || ((_a = room.members[uid()]) == null ? void 0 : _a.connected) === false) ? "\u25CB RECONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
 }
 function home() {
   const activeRooms = memberships.filter((r) => !["stopped", "Removed"].includes(r.status));
@@ -261,29 +262,101 @@ function tick() {
 }
 setInterval(tick, 250);
 async function attachPresence(id) {
-  if (connection) {
-    await connection.remove().catch(() => {
-    });
-    connection = null;
+  const owner = uid(), ctx = { active: true, transport: false, epoch: 0, pending: false, ref: null, retry: null, failures: 0, access: false };
+  const valid = (epoch) => ctx.active && subscribedRoomId === id && uid() === owner && ctx.epoch === epoch;
+  const connected = presence.ref(".info/connected"), ownConnections = presence.ref("onlinePresence/" + id + "/" + owner + "/connections");
+  let onOwn = null;
+  function watchOwn(snapshot) {
+    if (ctx.active && ctx.ref && !ctx.pending && !snapshot.hasChild(ctx.ref.key)) {
+      connectionReady = false;
+      render();
+      retry();
+    }
   }
-  const connected = presence.ref(".info/connected");
-  const cb = connected.on("value", async (s) => {
-    if (subscribedRoomId !== id) return;
-    connectionReady = false;
-    render();
-    if (!s.val() || !user) return;
+  function retry() {
+    if (!ctx.active || ctx.retry || !ctx.transport && ctx.access) return;
+    ctx.retry = setTimeout(() => {
+      ctx.retry = null;
+      repair();
+    }, Math.min(1e4, 1e3 * 2 ** Math.min(ctx.failures++, 4)));
+  }
+  async function repair() {
+    if (!ctx.active || ctx.pending || !navigator.onLine || ctx.access && !ctx.transport) return;
+    const epoch = ctx.epoch, ref = ctx.ref || ownConnections.push();
+    ctx.ref = ref;
+    ctx.pending = true;
     try {
-      const ref = presence.ref("onlinePresence/" + id + "/" + uid() + "/connections").push();
+      if (!ctx.access) {
+        await api({ operation: "presenceAccess", roomId: id });
+        if (!valid(epoch)) return;
+        ctx.access = true;
+      }
+      if (!onOwn) onOwn = ownConnections.on("value", watchOwn, () => {
+        if (ctx.active) {
+          onOwn = null;
+          ctx.access = false;
+          connectionReady = false;
+          render();
+          retry();
+        }
+      });
+      if (!ctx.transport) return;
       await ref.onDisconnect().remove();
+      if (!valid(epoch)) return;
       await ref.set(true);
+      if (!valid(epoch)) return;
+      const result = await api({ operation: "presenceSync", roomId: id });
+      if (!valid(epoch)) return;
+      if (!result.connected) throw Error("Presence acknowledgement pending");
       connection = ref;
       connectionReady = true;
+      ctx.failures = 0;
+      if (ctx.retry) {
+        clearTimeout(ctx.retry);
+        ctx.retry = null;
+      }
       render();
     } catch (e) {
-      notice("Presence connection unavailable. Reopen your room to retry.");
+      if (valid(epoch)) {
+        connectionReady = false;
+        render();
+        retry();
+      }
+    } finally {
+      ctx.pending = false;
+      if (!valid(epoch)) {
+        ref.remove().catch(() => {
+        });
+        if (ctx.active && ctx.transport) retry();
+      }
     }
+  }
+  const onTransport = connected.on("value", (snapshot) => {
+    if (!ctx.active) return;
+    const wasConnected = ctx.transport;
+    ctx.transport = snapshot.val() === true;
+    if (!ctx.transport) {
+      if (wasConnected) {
+        ctx.epoch++;
+        ctx.ref = null;
+        connection = null;
+      }
+      connectionReady = false;
+      render();
+    } else repair();
   });
-  unsubs.push(() => connected.off("value", cb));
+  presenceRecovery = repair;
+  repair();
+  unsubs.push(() => {
+    ctx.active = false;
+    ctx.epoch++;
+    clearTimeout(ctx.retry);
+    connected.off("value", onTransport);
+    if (onOwn) ownConnections.off("value", onOwn);
+    if (ctx.ref) ctx.ref.remove().catch(() => {
+    });
+    if (presenceRecovery === repair) presenceRecovery = null;
+  });
 }
 async function enter(id) {
   clearCollection();
@@ -307,7 +380,7 @@ async function enter(id) {
   selected = null;
   scoreOpen = false;
   unsubs.push(db.doc("onlineRooms/" + id).onSnapshot((s) => {
-    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
+    var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l, _m;
     if (subscribedRoomId !== id) return;
     if (!s.exists) {
       loadingRoom = false;
@@ -330,6 +403,7 @@ async function enter(id) {
     }
     room = next;
     previous = next;
+    if (((_m = room.members[uid()]) == null ? void 0 : _m.connected) === false) presenceRecovery == null ? void 0 : presenceRecovery();
     render();
   }, (e) => {
     loadingRoom = false;
@@ -349,7 +423,6 @@ async function enter(id) {
     if (s.size < 25) historyMore = false;
     if (historyOpen) render();
   }));
-  await api({ operation: "presenceAccess", roomId: id });
   await attachPresence(id);
   localStorage.setItem("kaliRoom", id);
 }
@@ -519,12 +592,19 @@ auth.onAuthStateChanged(async (current) => {
   }
   render();
 });
+window.kaliReconnect = () => {
+  presenceRecovery == null ? void 0 : presenceRecovery();
+  render();
+};
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) clearCollection();
-  else render();
+  else window.kaliReconnect();
 });
-window.addEventListener("online", render);
-window.addEventListener("offline", render);
+window.addEventListener("online", window.kaliReconnect);
+window.addEventListener("offline", () => {
+  connectionReady = false;
+  render();
+});
 window.kaliAcceptExchange = async (exchange) => {
   try {
     const result = await api({ exchange }, "kaliConsumeExchange");
