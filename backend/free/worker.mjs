@@ -48,7 +48,7 @@ export class KaliCoordinator extends DurableObject {
   }
   if(Number.isFinite(at)){at=Math.max(Date.now()+100,at,this.alarmRetryAfter);const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
  }
- async cleanupAlarm(at){const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
+ async cleanupAlarm(at){at=Math.max(at,this.alarmRetryAfter);const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
  async rate(key){const now=Date.now(),k='limit:'+key,old=await this.storage.get(k),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90)throw Error('Too many requests; try again shortly');await this.storage.put(k,{at:same?old.at:now,count});await this.cleanupAlarm(now+60000);}
  async fetch(request){return this.serial(async()=>{
   try{
