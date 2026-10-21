@@ -227,6 +227,10 @@
     if (type === "join") {
       assert(typeof action.name === "string" && action.name.trim().length > 0 && action.name.length <= 60, "Invalid name");
       if (p && p.status !== "Removed") {
+        if (!p.approved && action.playerId) {
+          p.requestedPlayerId = action.playerId;
+          p.name = action.name.trim();
+        }
         p.connected = true;
         p.status = active(room) && p.seat !== null ? "Playing" : p.seat !== null ? p.ready ? "Ready" : "Seated" : p.sittingOut ? "Sitting Out" : p.approved ? "Waiting" : "Invited";
         room.revision++;

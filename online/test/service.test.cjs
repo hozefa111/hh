@@ -39,3 +39,10 @@ test('custom session name persists and history actions require admin and valid i
  await A.rejects(f.service.history(f.who,{sessionId:'../bad',action:'delete',commandId:'history_123'}),/Invalid session/);
  await A.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'rename',name:' ',commandId:'history_123'}),/Session name/);
 });
+
+test('pending name correction and administrator relinking do not reserve a phantom player profile',async()=>{
+ const f=await fixture();await f.send('u',{type:'join',playerId:'wrong'});await f.send('u',{type:'join',playerId:'correct'});
+ A.equal(f.store.rooms.get(f.roomId).members.u.requestedPlayerId,'correct');A.equal(f.store.rooms.get(f.roomId).members.u.name,'correct');
+ await f.send('admin',{type:'approve',target:'u',playerId:'approved'});await f.send('v',{type:'join',playerId:'correct'});
+ A.equal(f.store.rooms.get(f.roomId).members.v.name,'correct');
+});
