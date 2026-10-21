@@ -10,7 +10,7 @@ async function fixture(mode=4){let seq=0,now=1000;const store=new Store,service=
  const send=async(uid,action,extra={})=>service.execute({uid,admin:uid==='admin'},{roomId,revision:store.rooms.get(roomId).revision,commandId:'command_'+(++seq),action,...extra});return{store,service,who,roomId,send,time:v=>now=v};}
 test('service rejects nonadmin creation and missing profiles',async()=>{const f=await fixture();await A.rejects(f.service.create({uid:'x',admin:false},{playerId:'px',mode:4}));});
 test('seat actions reject inherited object keys without mutating shared prototypes',async()=>{const f=await fixture();const before=Object.getOwnPropertyDescriptors(Object.prototype);for(const key of ['__proto__','constructor','toString']){await A.rejects(f.send('admin',{type:'remove',target:key}),/Not a room participant/);await A.rejects(f.send('admin',{type:'swap',target:'admin',other:key}),/Not a room participant/);}A.deepEqual(Object.getOwnPropertyDescriptors(Object.prototype),before);A.equal(f.store.rooms.get(f.roomId).revision,0);});
-test('atomic seat race: only one claims empty seat',async()=>{const f=await fixture();for(const u of ['u','v']){await f.send(u,{type:'join',name:u});await f.send('admin',{type:'approve',target:u,playerId:'p'+u});}const revision=f.store.rooms.get(f.roomId).revision;const results=await Promise.allSettled(['u','v'].map(u=>f.send('admin',{type:'seat',target:u,seat:2},{revision})));A.equal(results.filter(r=>r.status==='fulfilled').length,1);A.equal(R.ordered(f.store.rooms.get(f.roomId)).length,2);});
+test('atomic seat race: only one claims empty seat',async()=>{const f=await fixture();for(const u of ['u','v']){await f.send(u,{type:'join',playerId:'p'+u});await f.send('admin',{type:'approve',target:u,playerId:'p'+u});}const revision=f.store.rooms.get(f.roomId).revision;const results=await Promise.allSettled(['u','v'].map(u=>f.send('admin',{type:'seat',target:u,seat:2},{revision})));A.equal(results.filter(r=>r.status==='fulfilled').length,1);A.equal(R.ordered(f.store.rooms.get(f.roomId)).length,2);});
 test('idempotency, altered payload and stale revision rejection',async()=>{const f=await fixture(),request={roomId:f.roomId,revision:0,commandId:'unique_123',action:{type:'bot',seat:2}};const a=await f.service.execute(f.who,request),b=await f.service.execute(f.who,request);A.deepEqual(a,b);A.equal(f.store.rooms.get(f.roomId).revision,1);await A.rejects(f.service.execute(f.who,{...request,action:{type:'bot',seat:3}}));await A.rejects(f.send('admin',{type:'bot',seat:3},{revision:0}));});
 test('client cannot forge automatic action or server presence',async()=>{const f=await fixture();await A.rejects(f.send('admin',{type:'presence',connected:false}));for(let seat=2;seat<=4;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});const r=f.store.rooms.get(f.roomId),turn=r.hand.turn;f.time(r.hand.deadline+1);await A.rejects(f.send(turn,{type:'bid',bid:160,automatic:true}),/deadline/);});
 test('two concurrent timeout tasks apply only once; late action rejected',async()=>{const f=await fixture();for(let seat=2;seat<=4;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});const r=f.store.rooms.get(f.roomId),h=r.hand;f.time(h.deadline);const results=await Promise.all([f.service.due(f.roomId,h.id,h.turnGeneration),f.service.due(f.roomId,h.id,h.turnGeneration)]);A.equal(results.filter(r=>r.ignored).length,1);A.equal(f.store.rooms.get(f.roomId).revision,r.revision+1);await A.rejects(f.send(h.turn,{type:'bid',bid:165},{revision:r.revision}));});
@@ -19,4 +19,30 @@ test('many authoritative scheduled actions complete exactly one unified round',a
  if(h.deadline!==null){f.time(h.deadline);await f.service.due(f.roomId,h.id,h.turnGeneration);}else{const B=require('../shared/bot'),action=B.decide(R.publicState(r),h.turn,R.privateState(r,h.turn).cards);await f.send(h.turn,action);}}
  A.equal(f.store.rounds.size,1);const r=f.store.rooms.get(f.roomId),rec=[...f.store.rounds.values()][0];A.deepEqual(rec.playerIds,['pa']);A.equal(Object.values(r.hand.captured).reduce((a,b)=>a+b),250);A.equal(rec.sessionId,f.roomId);
 });
-test('waiting-list metadata cannot invalidate an otherwise current hand action',async()=>{const f=await fixture();for(let seat=2;seat<=4;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});const before=f.store.rooms.get(f.roomId),h=before.hand;await f.send('waiting',{type:'join',name:'Waiting'});await f.service.execute({uid:h.turn},{roomId:f.roomId,revision:before.revision,handId:h.id,turnGeneration:h.turnGeneration,commandId:'valid_turn_123',action:{type:'bid',pass:true}});A.equal(f.store.rooms.get(f.roomId).hand.passed[0],h.turn);await A.rejects(f.service.execute({uid:h.turn},{roomId:f.roomId,revision:before.revision,handId:h.id,turnGeneration:h.turnGeneration,commandId:'stale_turn_123',action:{type:'bid',bid:160}}));});
+test('waiting-list metadata cannot invalidate an otherwise current hand action',async()=>{const f=await fixture();for(let seat=2;seat<=4;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});const before=f.store.rooms.get(f.roomId),h=before.hand;await f.send('waiting',{type:'join',playerId:'waiting'});await f.service.execute({uid:h.turn},{roomId:f.roomId,revision:before.revision,handId:h.id,turnGeneration:h.turnGeneration,commandId:'valid_turn_123',action:{type:'bid',pass:true}});A.equal(f.store.rooms.get(f.roomId).hand.passed[0],h.turn);await A.rejects(f.service.execute({uid:h.turn},{roomId:f.roomId,revision:before.revision,handId:h.id,turnGeneration:h.turnGeneration,commandId:'stale_turn_123',action:{type:'bid',bid:160}}));});
+
+test('join requires existing profile; server resolves name and blocks duplicate requests without changing reconnect identity',async()=>{
+ const f=await fixture();const original=f.store.profile;f.store.profile=async id=>id==='missing'?null:original(id);
+ await A.rejects(f.send('u',{type:'join',name:'Invented'}),/existing Players/);
+ await A.rejects(f.send('u',{type:'join',playerId:'missing'}),/not found/);
+ await f.send('u',{type:'join',playerId:'pu',name:'Forged'});
+ let p=f.store.rooms.get(f.roomId).members.u;A.equal(p.name,'pu');A.equal(p.playerId,null);A.equal(p.requestedPlayerId,'pu');A.equal(p.approved,false);
+ await A.rejects(f.send('v',{type:'join',playerId:'pu'}),/already participating/);
+ await f.send('admin',{type:'approve',target:'u',playerId:'pu'});await f.send('admin',{type:'seat',target:'u',seat:2});
+ await f.send('u',{type:'join',playerId:'pu'});A.equal(f.store.rooms.get(f.roomId).members.u.seat,2);
+ await A.rejects(f.send('u',{type:'join',playerId:'other'}),/existing player profile/);
+});
+test('custom session name persists and history actions require admin and valid input',async()=>{
+ const f=await fixture();const created=await f.service.create(f.who,{playerId:'pa',mode:4,sessionName:'  Friday at home  '});A.equal(f.store.rooms.get(created.roomId).sessionName,'Friday at home');
+ await A.rejects(f.service.create(f.who,{playerId:'pa',mode:4,sessionName:' '}),/Session name/);
+ await A.rejects(f.service.history({uid:'guest'},{sessionId:f.roomId,action:'delete',commandId:'history_123'}),/Admin access/);
+ await A.rejects(f.service.history(f.who,{sessionId:'../bad',action:'delete',commandId:'history_123'}),/Invalid session/);
+ await A.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'rename',name:' ',commandId:'history_123'}),/Session name/);
+});
+
+test('pending name correction and administrator relinking do not reserve a phantom player profile',async()=>{
+ const f=await fixture();await f.send('u',{type:'join',playerId:'wrong'});await f.send('u',{type:'join',playerId:'correct'});
+ A.equal(f.store.rooms.get(f.roomId).members.u.requestedPlayerId,'correct');A.equal(f.store.rooms.get(f.roomId).members.u.name,'correct');
+ await f.send('admin',{type:'approve',target:'u',playerId:'approved'});await f.send('v',{type:'join',playerId:'correct'});
+ A.equal(f.store.rooms.get(f.roomId).members.v.name,'correct');
+});

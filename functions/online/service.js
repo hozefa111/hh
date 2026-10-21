@@ -4,7 +4,8 @@ const R=require('./shared/engine'),B=require('./shared/bot');
 class GameService{
  constructor(store,{random,id,code,clock=Date.now}){this.store=store;this.random=random;this.id=id;this.code=code;this.clock=clock;}
  async create(identity,payload){if(!identity.admin)throw new Error('Admin access required');const id=this.id(),code=this.code();const playerId=payload.playerId;const profile=await this.store.profile(playerId);if(!profile)throw new Error('Choose an existing player or register a profile');
- const r=R.create({id,code,uid:identity.uid,name:profile.name,playerId,mode:payload.mode,config:payload.config,difficulty:payload.difficulty},this.clock());await this.store.create(r,identity);return {roomId:id,code};}
+ const sessionName=String(payload.sessionName||'Online · '+code).trim();if(!sessionName||sessionName.length>80)throw new Error('Session name must be 1–80 characters');
+ const r=R.create({sessionName,id,code,uid:identity.uid,name:profile.name,playerId,mode:payload.mode,config:payload.config,difficulty:payload.difficulty},this.clock());await this.store.create(r,identity);return {roomId:id,code};}
  async execute(identity,request){
   const uid=identity.uid;let roomId=request.roomId;if(request.action?.type==='join'&&!roomId)roomId=await this.store.lookup(String(request.code||'').trim().toUpperCase());
   if(!roomId||!/^[a-zA-Z0-9_-]{1,100}$/.test(roomId))throw new Error('Room not found');
@@ -12,19 +13,30 @@ class GameService{
   const input=JSON.parse(JSON.stringify(request.action||{}));delete input.automatic;delete input.reason;
   if(input.type==='presence')throw new Error('Presence is server managed');
   // Resolve names through trusted profiles; callers cannot impersonate a profile by name.
-  if(['approve','reserve'].includes(input.type)){
+  if(['join','approve','reserve'].includes(input.type)){
    if(input.playerId){const profile=await this.store.profile(input.playerId);if(!profile)throw new Error('Player profile not found');input.name=profile.name;}
   }
+  if(input.type==='join'&&!input.playerId)throw new Error('Choose your name from the existing Players list');
   if(input.type==='bot')input.botId='bot_'+this.id();
   if(input.type==='reserve')input.reservationId='reserved_'+this.id();
   const key=uid+'_'+request.commandId, fingerprint=JSON.stringify({roomId,action:request.action,revision:request.revision,handId:request.handId,turnGeneration:request.turnGeneration});
   return this.store.transact(roomId,key,fingerprint,(room)=>{
    for(const field of ['target','other'])if(input[field]!==undefined&&!Object.prototype.hasOwnProperty.call(room.members,input[field]))throw new Error('Not a room participant');
-   const joining=input.type==='join';const gameAction=['bid','trump','partners','play'].includes(input.type),sameTurn=gameAction&&room.hand?.id===request.handId&&room.hand?.turnGeneration===request.turnGeneration;
+   const joining=input.type==='join';
+   if(joining){const existing=room.members[uid];if(existing&&existing.status!=='Removed'&&existing.playerId&&existing.playerId!==input.playerId)throw new Error('Reconnect with your existing player profile');const duplicate=Object.values(room.members).find(p=>p.uid!==uid&&p.kind==='human'&&!p.reservation&&p.status!=='Removed'&&(p.playerId===input.playerId||(!p.approved&&p.requestedPlayerId===input.playerId)));if(duplicate)throw new Error('Profile already participating');}
+  const gameAction=['bid','trump','partners','play'].includes(input.type),sameTurn=gameAction&&room.hand?.id===request.handId&&room.hand?.turnGeneration===request.turnGeneration;
    if(!joining&&request.revision!==room.revision&&!sameTurn)throw new Error('State changed. Please retry with the latest table.');
    if(['approve','reserve'].includes(input.type)&&input.playerId){const current=Object.values(room.members).find(p=>p.playerId===input.playerId&&p.uid!==input.target&&p.kind==='human'&&!p.reservation&&p.status!=='Removed');if(current)throw new Error('Profile already participating');}
    const next=R.command(room,uid,input,this.clock(),this.random);return {next,result:{roomId,revision:next.revision,serverNow:this.clock()}};
   });
+ }
+ async history(identity,request){
+  if(!identity.admin)throw new Error('Admin access required');
+  if(!/^[a-zA-Z0-9_-]{1,100}$/.test(request.sessionId||''))throw new Error('Invalid session');
+  if(!/^[a-zA-Z0-9_-]{8,100}$/.test(request.commandId||''))throw new Error('Command ID required');
+  if(!['rename','delete'].includes(request.action))throw new Error('Invalid session action');
+  const name=typeof request.name==='string'?request.name.trim():'';if(request.action==='rename'&&(!name||name.length>80))throw new Error('Session name must be 1–80 characters');
+  return this.store.history(identity.uid,{sessionId:request.sessionId,action:request.action,name,expectedName:request.expectedName??null,commandId:request.commandId});
  }
  async due(roomId,handId,generation){return this.store.transact(roomId,null,null,room=>{
   const h=room.hand,now=this.clock();if(!h||h.id!==handId||h.turnGeneration!==generation||room.paused||!R.active(room)||h.deadline===null||now<h.deadline)return {next:null,result:{ignored:true}};

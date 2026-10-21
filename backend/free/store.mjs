@@ -23,14 +23,26 @@ export class GameStore {
     const own=R.privateState(next,p.uid),old=before?R.privateState(before,p.uid):null;
     if(!was||!old||old.handId!==own.handId||JSON.stringify(old.cards)!==JSON.stringify(own.cards))writes.push(db.set(root+'/private/'+p.uid,own));
    }
-   if(p.kind==='human'&&!p.reservation&&(!prior||prior.status!==p.status||before.status!==next.status))writes.push(db.set('onlineMemberships/'+p.uid+'/rooms/'+next.id,{roomId:next.id,code:next.code,status:p.status==='Removed'?'Removed':next.status,createdAt:next.createdAt,sessionName:'Online · '+next.code}));
+   if(p.kind==='human'&&!p.reservation&&next.historyDeleted)writes.push(db.delete('onlineMemberships/'+p.uid+'/rooms/'+next.id));
+   else if(p.kind==='human'&&!p.reservation&&(!prior||prior.status!==p.status||before.status!==next.status||before.sessionName!==next.sessionName))writes.push(db.set('onlineMemberships/'+p.uid+'/rooms/'+next.id,{roomId:next.id,code:next.code,status:p.status==='Removed'?'Removed':next.status,createdAt:next.createdAt,sessionName:next.sessionName||'Online · '+next.code}));
   }
-  const changed=!before||before.startedAt!==next.startedAt||before.endedAt!==next.endedAt||before.completed!==next.completed||before.status!==next.status||JSON.stringify(before.totals)!==JSON.stringify(next.totals);
-  if((next.startedAt||next.status==='stopped')&&changed)writes.push(db.set('sessions/'+next.id,metadata.sessionRecord(next)));
+  const changed=!before||before.sessionName!==next.sessionName||before.startedAt!==next.startedAt||before.endedAt!==next.endedAt||before.completed!==next.completed||before.status!==next.status||JSON.stringify(before.totals)!==JSON.stringify(next.totals);
+  if(next.historyDeleted)writes.push(db.delete('sessions/'+next.id));
+  else if((next.startedAt||next.status==='stopped')&&changed)writes.push(db.set('sessions/'+next.id,metadata.sessionRecord(next)));
   if(next.hand&&(!before?.hand||before.hand.id!==next.hand.id||before.hand.phase!==next.hand.phase)&&['complete','void'].includes(next.hand.phase)){
    const h=next.hand;writes.push(db.set(root+'/hands/'+h.id,{...(h.phase==='complete'?next.lastResult:{handId:h.id,void:true,seatMap:h.seatMap}),handNumber:h.number,completedAt:h.completedAt||Date.now(),tricks:h.tricks,deckConfig:h.config}));
    if(h.phase==='complete')writes.push(db.set('rounds/online_'+h.id,{...R.roundRecord(next),timestamp:new Date(h.completedAt)},true));
   }return writes;
+ }
+ async history(uid,request){
+  let nextState;const result=await this.db.transaction(async tx=>{
+   const path='onlineHistoryReceipts/'+uid+'_'+request.commandId,fingerprint=JSON.stringify(request),receipt=await this.db.get(path,tx);
+   if(receipt){if(receipt.fingerprint!==fingerprint)throw Error('Command ID already used');return {writes:[],result:receipt.result};}
+   const before=await this.db.get('onlineState/'+request.sessionId,tx),session=await this.db.get('sessions/'+request.sessionId,tx);
+   const {next,result}=metadata.historyChange(before,session,request);nextState=next;
+   const writes=next?this.projection(before,next):[request.action==='delete'?this.db.delete('sessions/'+request.sessionId):this.db.set('sessions/'+request.sessionId,{...session,sessionName:request.name})];
+   writes.push(this.db.set(path,{fingerprint,result,createdAt:new Date()},true));return {writes,result};
+  });if(nextState)await this.track(request.sessionId,nextState);return result;
  }
  async create(room){
   await this.track(room.id);await this.db.transaction(async tx=>{

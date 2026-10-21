@@ -92,11 +92,11 @@
       p.status = !connected(p) ? "Disconnected" : p.ready ? "Ready" : "Seated";
     }
   }
-  function create({ id, code, uid, name, playerId, mode = 4, config = {}, difficulty = "normal" }, now) {
+  function create({ id, code, uid, name, playerId, sessionName, mode = 4, config = {}, difficulty = "normal" }, now) {
     deck(mode, config);
     assert(id && uid && playerId, "Missing identity");
     assert(typeof name === "string" && name.trim().length > 0 && name.length <= 60, "Invalid name");
-    return { id, code, admin: uid, mode, config: { sixSuits: config.sixSuits || ["C", "D"], extraThree: config.extraThree || "H" }, difficulty, revision: 0, status: "lobby", createdAt: now, startedAt: null, endedAt: null, handNumber: 0, completed: 0, defaultSeat: 1, paused: false, pauseReason: null, stopAfterHand: false, members: { [uid]: { uid, playerId, name: name.trim(), kind: "human", seat: 1, status: "Seated", approved: true, ready: false, connected: true, joinedAt: now } }, totals: { [playerId]: 0 }, scoreNames: { [playerId]: name.trim() }, hand: null, lastResult: null, events: [] };
+    return { id, code, sessionName: sessionName || "Online \xB7 " + code, admin: uid, mode, config: { sixSuits: config.sixSuits || ["C", "D"], extraThree: config.extraThree || "H" }, difficulty, revision: 0, status: "lobby", createdAt: now, startedAt: null, endedAt: null, handNumber: 0, completed: 0, defaultSeat: 1, paused: false, pauseReason: null, stopAfterHand: false, members: { [uid]: { uid, playerId, name: name.trim(), kind: "human", seat: 1, status: "Seated", approved: true, ready: false, connected: true, joinedAt: now } }, totals: { [playerId]: 0 }, scoreNames: { [playerId]: name.trim() }, hand: null, lastResult: null, events: [] };
   }
   function event(room, type, data, now) {
     room.events.push({ id: room.revision + ":" + room.events.length, type, at: now, ...data });
@@ -227,12 +227,19 @@
     if (type === "join") {
       assert(typeof action.name === "string" && action.name.trim().length > 0 && action.name.length <= 60, "Invalid name");
       if (p && p.status !== "Removed") {
+        if (!p.approved && action.playerId) {
+          p.requestedPlayerId = action.playerId;
+          p.name = action.name.trim();
+        }
         p.connected = true;
         p.status = active(room) && p.seat !== null ? "Playing" : p.seat !== null ? p.ready ? "Ready" : "Seated" : p.sittingOut ? "Sitting Out" : p.approved ? "Waiting" : "Invited";
         room.revision++;
         return room;
       }
       if (p && p.status === "Removed") {
+        p.name = action.name.trim();
+        p.requestedPlayerId = action.playerId || null;
+        p.playerId = null;
         p.status = "Invited";
         p.sittingOut = false;
         p.approved = false;
@@ -242,7 +249,7 @@
         room.revision++;
         return room;
       }
-      room.members[uid] = { uid, playerId: null, name: action.name.trim(), kind: "human", seat: null, status: "Invited", approved: false, ready: false, connected: true, joinedAt: now };
+      room.members[uid] = { uid, playerId: null, requestedPlayerId: action.playerId || null, name: action.name.trim(), kind: "human", seat: null, status: "Invited", approved: false, ready: false, connected: true, joinedAt: now };
       event(room, "join", { uid }, now);
     } else if (type === "presence") {
       member(room, uid);

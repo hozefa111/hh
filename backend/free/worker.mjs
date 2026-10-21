@@ -60,6 +60,7 @@ export class KaliCoordinator extends DurableObject {
     const token=/^Bearer (.+)$/.exec(request.headers.get('Authorization')||'');if(!token)throw Error('Sign in required');
     const who=await this.identity.verify(token[1]);await this.rate(who.uid);who.admin=who.admin||!!await this.db.get('admins/'+who.uid);
     if(body.operation==='create')result=await this.service.create(who,body);
+    else if(body.operation==='sessionHistory')result=await this.service.history(who,body);
     else if(body.operation==='clock')result={serverNow:Date.now()};
     else if(body.operation==='presenceAccess'){
      if(!/^[a-zA-Z0-9_-]{1,100}$/.test(body.roomId||''))throw Error('Invalid room');

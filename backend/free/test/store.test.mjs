@@ -77,10 +77,32 @@ test('REST receipts reject command mutation; hidden partners do not enter public
  }
  const pub=f.memory.get('onlineRooms/'+f.roomId);assert.equal(pub.hand.secret,null);assert.equal(pub.hand.partners,null);assert(!('hands'in pub.hand));
  const own=f.memory.get('onlineRooms/'+f.roomId+'/private/admin');assert.equal(own.cards.length,7);
- await f.send('waiting',{type:'join',name:'Waiting'});const waiting=f.memory.get('onlineRooms/'+f.roomId+'/private/waiting');assert.deepEqual(waiting.cards,[]);
+ f.memory.put('players/pwaiting',{name:'Waiting'});await f.send('waiting',{type:'join',playerId:'pwaiting'});const waiting=f.memory.get('onlineRooms/'+f.roomId+'/private/waiting');assert.deepEqual(waiting.cards,[]);
 });
 test('REST profile linking cannot steal a previously linked human identity',async()=>{
  const f=await fixture(4);f.memory.put('players/pb',{name:'B'});f.memory.put('onlineProfileLinks/pb',{uid:'someone-else',playerId:'pb'});
- await f.send('b',{type:'join',name:'B'});await assert.rejects(f.send('admin',{type:'approve',target:'b',playerId:'pb'}),/another identity/);
+ await f.send('b',{type:'join',playerId:'pb'});await assert.rejects(f.send('admin',{type:'approve',target:'b',playerId:'pb'}),/another identity/);
  assert.equal(f.rooms.get(f.roomId).members.b.approved,false);
+});
+
+test('online rename stays synchronized; stopped-session deletion preserves scored rounds and is exactly once',async()=>{
+ const f=await fixture(4);const meta=(action,name,extra={})=>f.service.history(f.who,{sessionId:f.roomId,action,name,commandId:'history_'+crypto.randomUUID(),...extra});
+ await meta('rename','Friday game');assert.equal(f.memory.get('onlineRooms/'+f.roomId).sessionName,'Friday game');assert.equal(f.memory.get('onlineMemberships/admin/rooms/'+f.roomId).sessionName,'Friday game');
+ await assert.rejects(meta('delete'),/Stop the online session/);
+ for(let seat=2;seat<=4;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});
+ let steps=0;while(R.active(f.rooms.get(f.roomId))){assert(++steps<160);const r=f.rooms.get(f.roomId),h=r.hand;if(h.deadline!==null){f.time(h.deadline);await f.service.due(r.id,h.id,h.turnGeneration);}else await f.send(h.turn,B.decide(R.publicState(r),h.turn,R.privateState(r,h.turn).cards));}
+ assert.equal(f.memory.get('sessions/'+f.roomId).sessionName,'Friday game');
+ await assert.rejects(meta('rename','Other',{expectedName:'Stale name'}),/changed/);
+ await f.send('admin',{type:'stop'});const roundPath='rounds/online_'+f.rooms.get(f.roomId).hand.id,round=f.memory.get(roundPath),totals=f.rooms.get(f.roomId).totals;
+ const commandId='history_delete_123';await meta('delete',undefined,{commandId,expectedName:'Friday game'});await meta('delete',undefined,{commandId,expectedName:'Friday game'});
+ assert.equal(f.memory.get('sessions/'+f.roomId),null);assert.equal(f.memory.get('onlineMemberships/admin/rooms/'+f.roomId),null);assert.deepEqual(f.memory.get(roundPath),round);assert.deepEqual(f.rooms.get(f.roomId).totals,totals);assert(f.rooms.get(f.roomId).historyDeleted);
+ await assert.rejects(meta('rename','Resurrect'),/already deleted/);
+ const before=f.rooms.get(f.roomId);for(const w of f.store.projection(before,before))assert(!w.update?.name.includes('/sessions/'));
+ await assert.rejects(meta('rename','Changed',{commandId}),/already used/);
+});
+test('legacy online session metadata can be renamed/deleted without modifying manual records or lifetime rounds',async()=>{
+ const f=await fixture(4);f.memory.put('sessions/legacy',{source:'online',sessionName:'Old online',endTime:new Date(1000),leaderboard:[{name:'A',score:360}]});f.memory.put('sessions/manual',{sessionName:'Manual',endTime:new Date(1000)});
+ await f.service.history(f.who,{sessionId:'legacy',action:'rename',name:'Renamed',commandId:'rename_legacy_123',expectedName:'Old online'});assert.equal(f.memory.get('sessions/legacy').sessionName,'Renamed');
+ await f.service.history(f.who,{sessionId:'legacy',action:'delete',commandId:'delete_legacy_123'});assert.equal(f.memory.get('sessions/legacy'),null);assert.equal(f.memory.get('sessions/manual').sessionName,'Manual');
+ await assert.rejects(f.service.history(f.who,{sessionId:'manual',action:'delete',commandId:'delete_manual_123'}),/Online session not found/);
 });
