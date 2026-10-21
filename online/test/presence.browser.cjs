@@ -9,7 +9,7 @@ const {initializeApp}=require('firebase-admin/app'),{getFirestore}=require('fire
  const id=await page.evaluate(()=>room.id);
  const forceDisconnected=async()=>{const ref=db.doc('onlineState/'+id),r=(await ref.get()).data();r.members[u.uid].connected=false;r.members[u.uid].status='Disconnected';r.revision++;await ref.set(r);await db.doc('onlineRooms/'+id).set(R.publicState(r));};
  await forceDisconnected();await ready();checks.push('server-disconnected seat repairs immediately through authenticated RTDB acknowledgement, without the 30-second poll');
- await page.evaluate(()=>presence.goOffline());await page.waitForFunction(()=>!connectionReady);A(!(await page.locator('header .connection').textContent()).includes('● ONLINE'));
+ await page.evaluate(()=>presence.goOffline());await page.waitForFunction(()=>!connectionReady&&document.querySelector('header .connection').textContent.includes('RECONNECTING'));A(!(await page.locator('header .connection').textContent()).includes('● ONLINE'));
  await page.evaluate(()=>presence.goOnline());await ready();checks.push('network drop clears ONLINE and reconnect restores the same participant and seat');
  const first=await page.evaluate(()=>({uid:user.uid,seat:room.members[user.uid].seat,ref:connection.key}));await page.waitForTimeout(65000);await ready();const next=await page.evaluate(()=>({uid:user.uid,seat:room.members[user.uid].seat,ref:connection.key}));A.deepEqual(next,first);checks.push('real presence subscription stays connected beyond the idle interval, preserving identity and seat');
  await forceDisconnected();await page.evaluate(()=>window.kaliReconnect());await ready();checks.push('foreground/native resume repairs the connection without refreshing the page or resetting the room');
