@@ -131,3 +131,6 @@ body.live-game.bidding{--phase-height:92px}
 .live-main .max-bid-state>strong{color:var(--gold)}.live-main .max-bid-state>span{grid-column:1;font-size:11px}
 .live-main .max-bid-state>.bid-timeout-note{grid-column:1;text-align:left}
 .live-main .max-bid-state>button{grid-column:2;grid-row:1/4;min-height:44px;height:44px;min-width:70px}
+
+.pause-banner{max-height:calc(100vh - 60px);max-height:calc(100dvh - 60px);overflow:auto}
+.pause-actions{display:flex;gap:8px;flex-wrap:wrap}.pause-actions button{flex:1;min-width:0;font-size:12px;padding:10px}

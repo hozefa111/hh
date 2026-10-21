@@ -103,8 +103,10 @@ async function command(action) {
   const body = { roomId: room.id, revision: room.revision, handId: (_a = room.hand) == null ? void 0 : _a.id, turnGeneration: (_b = room.hand) == null ? void 0 : _b.turnGeneration, commandId: crypto.randomUUID(), action };
   try {
     await api(body);
+    return true;
   } catch (e) {
     notice(e.message);
+    return false;
   } finally {
     busy = false;
     render();
@@ -117,8 +119,37 @@ function seatConnected() {
 function recoveryPanel() {
   return room && room.status !== "stopped" && !seatConnected() ? `<section class="connection-recovery" role="status"><span>${navigator.onLine ? "Restoring your seat\u2026" : "Offline \xB7 reconnect when internet returns"}</span>${btn(reconnectBusy ? "Retrying\u2026" : "\u21BB Reconnect", "reconnect", reconnectBusy)}</section>` : "";
 }
+function missingPlayers() {
+  return R.active(room) ? room.hand.seatMap.filter((p) => p.kind !== "bot" && !room.members[p.uid].connected) : [];
+}
 function pauseControl() {
-  return room.admin === uid() && room.status !== "stopped" ? btn(room.paused ? "Resume" : "Pause", room.paused ? "resume" : "pause") : "";
+  return room.admin === uid() && room.status !== "stopped" ? btn(room.paused ? "Resume" : "Pause", room.paused ? "resume" : "pause", room.paused && missingPlayers().length > 0) : "";
+}
+function pauseBanner() {
+  if (!room.paused) return "";
+  const missing = missingPlayers(), owner = room.admin === uid();
+  return `<section class="pause-banner"><h2>\u2161 Game paused</h2><p>${missing.length ? "Waiting for " + missing.map((p) => esc(name(p.uid))).join(", ") + ". Their seats, cards and remaining time are preserved." : "Admin paused the table. Cards and remaining time are preserved."}</p><div class="pause-actions">${owner ? btn("Resume game", "resume", missing.length > 0) + (R.active(room) ? btn("Void hand & replace player", "void-replace", false, "danger") : "") : "<p>Reconnect to your existing seat. The admin resumes when everyone is connected.</p>"}</div>${owner && missing.length ? '<p class="muted">Wait for reconnection, or void this unfinished hand before choosing a replacement. Completed scores stay saved.</p>' : ""}</section>`;
+}
+function leaveRoomView() {
+  clearCollection();
+  subscribedRoomId = null;
+  room = null;
+  own = { cards: [] };
+  previous = null;
+  selected = null;
+  loadingRoom = false;
+  error = "";
+  screen = "home";
+  unsubs.forEach((f) => f());
+  unsubs = [];
+  if (connection) {
+    const old = connection;
+    connection = null;
+    old.remove().catch(() => {
+    });
+  }
+  connectionReady = false;
+  render();
 }
 async function reconnectSeat() {
   if (!room || !user || reconnectBusy) return;
@@ -161,7 +192,7 @@ function home() {
 }
 function liveRoom() {
   const owner = room.admin === uid(), panel = scoreOpen ? "scores" : historyOpen ? "history" : screen === "manage" ? "manage" : null;
-  return `<section class="room-head live"><h1 title="${esc(room.sessionName)}">${esc(room.sessionName || room.code)}</h1><div class="room-actions">${btn("\u2197", "share", false, "gold")}${pauseControl()}${owner ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${table()}<nav class="toolbar live-tools" aria-label="Table options">${btn("Scores", "scores")}${btn("History", "history")}${owner ? btn("Manage", "manage") : btn("Leave", "leave")}</nav>${panel ? `<section class="table-drawer" role="dialog" aria-modal="true" aria-label="${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}"><div class="drawer-top"><strong>${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}</strong>${btn("Close", "close-panel")}</div><div class="drawer-body">${panel === "scores" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + scoreboard() : panel === "history" ? history() : btn("Rename session", "rename-session") + management()}</div></section>` : ""}${room.paused ? `<section class="pause-banner"><h2>\u2161 Game paused</h2><p>${room.pauseReason === "disconnected" ? "A player disconnected. Cards and remaining time are preserved." : "Admin paused the table."}</p>${owner ? btn("Resume game", "resume") : ""}</section>` : ""}`;
+  return `<section class="room-head live"><h1 title="${esc(room.sessionName)}">${esc(room.sessionName || room.code)}</h1><div class="room-actions">${btn("\u2197", "share", false, "gold")}${pauseControl()}${owner ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${table()}<nav class="toolbar live-tools" aria-label="Table options">${btn("Scores", "scores")}${btn("History", "history")}${owner ? btn("Manage", "manage") : btn("Leave", "leave")}</nav>${panel ? `<section class="table-drawer" role="dialog" aria-modal="true" aria-label="${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}"><div class="drawer-top"><strong>${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}</strong>${btn("Close", "close-panel")}</div><div class="drawer-body">${panel === "scores" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + scoreboard() : panel === "history" ? history() : btn("Rename session", "rename-session") + management()}</div></section>` : ""}${pauseBanner()}`;
 }
 function lobby() {
   if (R.active(room)) return liveRoom();
@@ -169,7 +200,7 @@ function lobby() {
   return `<section class="room-head ${hasHand ? "live" : ""}"><div><span class="eyebrow">${room.mode} PLAYERS \xB7 250 POINTS</span><h1>${esc(room.sessionName || "Table " + room.code)}</h1><p class="room-code">Room ${esc(room.code)}</p><p>Clockwise seats \xB7 ${room.status === "stopped" ? "Session complete" : "Session stays open until admin stops it"}</p></div><div class="room-actions">${btn("\u2197 Invite", "share", false, "gold")}${isOwner && room.status !== "stopped" ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${hasHand ? table() : `<div class="lobby-seats">${Array.from({ length: room.mode }, (_, i) => {
     const p = seated.find((p2) => p2.seat === i + 1);
     return `<article class="seat-card ${(p == null ? void 0 : p.uid) === uid() ? "self" : ""}"><span class="seat-number">SEAT ${i + 1}</span><div class="avatar">${(p == null ? void 0 : p.kind) === "bot" ? "\u265F" : esc(((p == null ? void 0 : p.name) || "?").slice(0, 1).toUpperCase())}</div><h3>${esc((p == null ? void 0 : p.name) || "Empty seat")}</h3><span class="badge">${p ? p.kind === "bot" ? "COMPUTER" : "HUMAN" : "OPEN"}</span><p>${p ? status(p) : "Ready for a player"}</p>${!p && isOwner && room.status !== "stopped" ? btn("+ Computer", "bot:" + (i + 1)) : ""}</article>`;
-  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : !hasHand ? `<section class="ready-bar"><p>${room.paused ? "Session paused \xB7 Admin must Resume before Ready." : R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", room.paused || !seatConnected() || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : '<p class="muted">Waiting for admin approval and a seat.</p>'}</section>` : ""}<div class="toolbar">${room.status !== "stopped" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + pauseControl() : ""}${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") + btn("Rename session", "rename-session") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${room.paused ? `<section class="pause-banner"><h2>\u2161 Game paused</h2><p>${room.pauseReason === "disconnected" ? "A player disconnected. Cards and time remaining are preserved." : "Admin paused the table."}</p>${isOwner ? btn("Resume game", "resume") : ""}</section>` : ""}`;
+  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : !hasHand ? `<section class="ready-bar"><p>${room.paused ? "Session paused \xB7 Admin must Resume before Ready." : R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", room.paused || !seatConnected() || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : '<p class="muted">Waiting for admin approval and a seat.</p>'}</section>` : ""}<div class="toolbar">${room.status !== "stopped" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + pauseControl() : ""}${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") + btn("Rename session", "rename-session") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${pauseBanner()}`;
 }
 function status(p) {
   return !p.connected && p.kind !== "bot" ? "\u25CB Disconnected" : p.ready ? "\u2713 Ready" : esc(p.status);
@@ -260,7 +291,7 @@ function history() {
 }
 function management() {
   const active = R.active(room), ps = Object.values(room.members).filter((p) => p.status !== "Removed");
-  return `<section class="panel management"><h2>Manage table</h2><p class="muted">${active ? "Seats stay locked until this hand completes or is voided." : "Seating changes reset readiness."}</p>${ps.map((p) => `<div class="manage-person"><b>${esc(p.name)}</b><span>${p.kind === "bot" ? "Computer" : status(p)} \xB7 ${p.seat ? "Seat " + p.seat : "Waiting"}</span>${!p.approved && !p.reservation && !active ? `<form class="approve" data-target="${esc(p.uid)}"><select name="playerId">${profiles.map((x) => `<option value="${esc(x.id)}" ${p.requestedPlayerId === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select><button>Approve & link profile</button></form>` : ""}${!active && (p.approved || p.reservation) ? `<form class="assign" data-target="${esc(p.uid)}"><select name="seat">${Array.from({ length: room.mode }, (_, i) => `<option value="${i + 1}">Seat ${i + 1}</option>`).join("")}</select><button>Assign / Move</button></form>${p.uid !== room.admin ? btn("Waiting", "unseat:" + p.uid) + btn("Sit out", "sitout:" + p.uid) + btn("Remove", "remove:" + p.uid) : ""}` : ""}</div>`).join("")}${!active ? `<form id="swap"><h3>Swap seats</h3><select name="target">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><select name="other">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><button>Swap</button></form><form id="reserve"><h3>Reserve existing player</h3><select name="playerId">${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button>Reserve profile</button></form><label>Computer difficulty<select id="difficulty"><option value="normal">Normal</option><option value="easy">Easy</option></select></label>` : ""}${!active ? `<form id="deck-config"><h3>Next-hand deck settings</h3>${room.mode === 4 ? `<label>First six<select name="six1">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[0] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[1] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label>` : ""}<label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}" ${room.config.extraThree === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><button>Save deck & reset Ready</button></form>` : ""}<div class="toolbar">${active ? btn(room.paused ? "Resume" : "Pause", room.paused ? "resume" : "pause") + btn("Void interrupted hand", "void", false, "danger") : ""}</div></section>`;
+  return `<section class="panel management"><h2>Manage table</h2><p class="muted">${active ? "Seats stay locked until this hand completes or is voided." : "Replace with computer, or remove the outgoing player and assign an approved waiting player to the empty seat. Seating changes reset readiness."}</p>${ps.map((p) => `<div class="manage-person"><b>${esc(p.name)}</b><span>${p.kind === "bot" ? "Computer" : status(p)} \xB7 ${p.seat ? "Seat " + p.seat : "Waiting"}</span>${!p.approved && !p.reservation && !active ? `<form class="approve" data-target="${esc(p.uid)}"><select name="playerId">${profiles.map((x) => `<option value="${esc(x.id)}" ${p.requestedPlayerId === x.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select><button>Approve & link profile</button></form>` : ""}${!active && (p.approved || p.reservation) ? `<form class="assign" data-target="${esc(p.uid)}"><select name="seat">${Array.from({ length: room.mode }, (_, i) => `<option value="${i + 1}">Seat ${i + 1}</option>`).join("")}</select><button>Assign / Move</button></form>${p.uid !== room.admin ? btn("Waiting", "unseat:" + p.uid) + btn("Sit out", "sitout:" + p.uid) + btn("Remove", "remove:" + p.uid) + (p.kind === "human" && p.seat !== null ? btn("Replace with computer", "replace-bot:" + p.uid) : "") : ""}` : ""}</div>`).join("")}${!active ? `<form id="swap"><h3>Swap seats</h3><select name="target">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><select name="other">${R.ordered(room).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select><button>Swap</button></form><form id="reserve"><h3>Reserve existing player</h3><select name="playerId">${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button>Reserve profile</button></form><label>Computer difficulty<select id="difficulty"><option value="normal">Normal</option><option value="easy">Easy</option></select></label>` : ""}${!active ? `<form id="deck-config"><h3>Next-hand deck settings</h3>${room.mode === 4 ? `<label>First six<select name="six1">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[0] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option value="${s}" ${room.config.sixSuits[1] === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label>` : ""}<label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}" ${room.config.extraThree === s ? "selected" : ""}>${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><button>Save deck & reset Ready</button></form>` : ""}<div class="toolbar">${active ? btn(room.paused ? "Resume" : "Pause", room.paused ? "resume" : "pause") + btn("Void interrupted hand", "void", false, "danger") : ""}</div></section>`;
 }
 function updateBidControls() {
   const form = root.querySelector("#bid"), select = form == null ? void 0 : form.querySelector("select");
@@ -641,7 +672,7 @@ root.addEventListener("change", (e) => {
   if (e.target.matches("#bid select")) updateBidControls();
 });
 root.addEventListener("click", async (e) => {
-  var _a, _b;
+  var _a, _b, _c;
   const target = e.target.closest("[data-action]");
   if (!target || target.disabled) return;
   const [action, ...tail] = target.dataset.action.split(":"), arg = tail.join(":");
@@ -678,21 +709,9 @@ root.addEventListener("click", async (e) => {
       render();
     } else if (action === "room") await enter(arg);
     else if (action === "home") {
-      clearCollection();
-      subscribedRoomId = null;
-      room = null;
-      own = { cards: [] };
-      screen = "home";
-      unsubs.forEach((f) => f());
-      unsubs = [];
-      if (connection) {
-        const old = connection;
-        connection = null;
-        old.remove().catch(() => {
-        });
-      }
-      connectionReady = false;
-      render();
+      leaveRoomView();
+    } else if (action === "leave") {
+      if (await command({ type: "leave" })) leaveRoomView();
     } else if (action === "share") {
       if (location.hostname === "appassets.androidplatform.net") {
         location.href = "https://appassets.androidplatform.net/assets/kali/share?code=" + encodeURIComponent(room.code);
@@ -744,6 +763,17 @@ root.addEventListener("click", async (e) => {
       scoreOpen = false;
       historyOpen = false;
       render();
+    } else if (action === "void-replace") {
+      if (confirm("Void this unfinished hand and choose a replacement? No points will be awarded for this hand. Completed hands and scores stay saved.")) {
+        if (await command({ type: "void" })) {
+          screen = "manage";
+          scoreOpen = false;
+          historyOpen = false;
+          render();
+        }
+      }
+    } else if (action === "replace-bot") {
+      if (confirm("Replace " + name(arg) + " with a computer for the next hand? Their previous scores stay saved. The computer starts with its own score.")) await command({ type: "replaceBot", target: arg, difficulty: ((_c = document.getElementById("difficulty")) == null ? void 0 : _c.value) || "normal" });
     } else if (action === "void") {
       if (confirm("Void this unfinished hand? No scores will be awarded.")) await command({ type: "void" });
     } else if (action === "rename-session") {
@@ -758,7 +788,7 @@ root.addEventListener("click", async (e) => {
         if ((answer == null ? void 0 : answer.toUpperCase()) === "FINISH") await command({ type: "stop", finish: true });
         else if ((answer == null ? void 0 : answer.toUpperCase()) === "VOID") await command({ type: "stop", void: true });
       } else if (confirm("Stop this session and save final standings?")) await command({ type: "stop" });
-    } else if (["ready", "pause", "resume", "leave"].includes(action)) await command({ type: action });
+    } else if (["ready", "pause", "resume"].includes(action)) await command({ type: action });
   } catch (err) {
     if (err.name !== "AbortError") notice(err.message);
   }

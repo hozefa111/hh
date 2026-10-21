@@ -81,6 +81,13 @@ function command(input,uid,action,now,random){const room=clone(input);assert(roo
   member(room,uid);assert(typeof action.connected==='boolean','Invalid presence');p.connected=action.connected;
   if(!p.connected){p.ready=false;p.status='Disconnected';if(active(room)&&room.hand.seatMap.some(x=>x.uid===uid))pause(room,'disconnected',now);}
   else p.status=active(room)&&p.seat!==null?'Playing':p.seat!==null?(p.ready?'Ready':'Seated'):(p.sittingOut?'Sitting Out':p.approved?'Waiting':'Invited');
+ }else if(type==='replaceBot'){
+  owner(room,uid);assert(!active(room),'Void or finish this hand before replacing a player');
+  const target=member(room,action.target);assert(target.uid!==room.admin&&target.kind==='human'&&target.seat!==null,'Choose a seated non-admin human');
+  const seat=target.seat;
+  // Both transitions are evaluated inside one authoritative transaction; failures commit neither.
+  const removed=command(room,uid,{type:'remove',target:target.uid},now,random);
+  return command(removed,uid,{type:'bot',seat,botId:action.botId,difficulty:action.difficulty},now,random);
  }else if(['approve','seat','swap','unseat','remove','bot','config','sitout','reserve'].includes(type)){
   owner(room,uid);assert(!active(room),'Seat order is locked during a hand');
   if(type==='bot'){
