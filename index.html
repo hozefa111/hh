@@ -8,8 +8,8 @@
     <meta name="apple-mobile-web-app-title" content="3 Patti PRO">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="description" content="Track 3 Patti scores like a pro — real-time leaderboard, hukum rounds, analytics with Firebase">
-    <link rel="manifest" href="/manifest.json">
-    <link rel="apple-touch-icon" href="/icon-192.png">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
     <title>3 Patti PRO — Score Tracker</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Poppins:wght@500;600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -60,6 +60,7 @@
                     </div>
                 </div>
 
+                <a class="online-launch" href="online/index.html"><span class="online-launch-art">♠ ♥ ♣ ♦</span><span><small>YOUR TABLE IS WAITING</small><strong>Play Online</strong><em>Kali Ki Tidi · Friends & computers · 250 points</em></span><b>↗</b></a>
                 <!-- Session Controls (Admin Only) -->
                 <div class="admin-only" id="session-controls"></div>
 
@@ -317,17 +318,19 @@
     </div>
 
     <!-- Firebase SDKs (v9 compat for vanilla JS) -->
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script src="online/vendor/firebase-app-compat.js"></script>
+    <script src="online/vendor/firebase-auth-compat.js"></script>
+    <script src="online/vendor/firebase-firestore-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-analytics-compat.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="firebase-config.js"></script>
+    <script src="online/shared/engine.js"></script>
+    <script src="online/shared/session.js"></script>
     <script src="app.js"></script>
     <script>
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/service-worker.js');
+          navigator.serviceWorker.register('service-worker.js');
         });
       }
     </script>

@@ -1,0 +1,30 @@
+rules_version = '2';
+service cloud.firestore {
+ match /databases/{database}/documents {
+  function signed(){return request.auth!=null;}
+  function admin(){return signed() && (request.auth.token.get('admin',false)==true || exists(/databases/$(database)/documents/admins/$(request.auth.uid)));}
+  function roomMember(room){return signed() && exists(/databases/$(database)/documents/onlineRooms/$(room)/members/$(request.auth.uid));}
+  match /admins/{uid} { allow get: if signed()&&request.auth.uid==uid; allow list,write: if false; }
+  match /players/{id} { allow read: if true; allow write: if admin(); }
+  match /rounds/{id} {
+   allow read: if true;
+   allow create: if admin() && (!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow update,delete: if admin() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
+  }
+  match /sessions/{id} {
+   allow read: if true;
+   allow create: if admin() && (!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow update,delete: if admin() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
+  }
+  match /onlineRooms/{room} {
+   allow get: if roomMember(room); allow list,write: if false;
+   match /members/{uid} { allow get: if signed()&&request.auth.uid==uid; allow list,write: if false; }
+   match /private/{uid} { allow get: if signed()&&request.auth.uid==uid&&roomMember(room); allow list,write: if false; }
+   match /hands/{hand} { allow read: if roomMember(room); allow write: if false; }
+  }
+  match /onlineMemberships/{uid}/rooms/{room} {allow read:if signed()&&request.auth.uid==uid;allow write:if false;}
+  match /pendingNotifications/{id} {allow read,write:if admin();}
+  match /fcmTokens/{id} {allow read:if admin();allow create,update:if signed()&&request.resource.data.uid==request.auth.uid;allow delete:if admin()||(signed()&&resource.data.uid==request.auth.uid);}
+  match /{document=**} {allow read,write:if false;}
+ }
+}

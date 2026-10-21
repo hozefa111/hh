@@ -1,0 +1,1 @@
+{"rules":{".read":false,".write":false,"onlinePresence":{"$room":{"$uid":{"connections":{".read":"auth != null && auth.uid === $uid && root.child('onlineAcl').child($room).child($uid).val() === true","$connection":{".write":"auth != null && auth.uid === $uid && root.child('onlineAcl').child($room).child($uid).val() === true",".validate":"newData.val() === true"}}}}}}}
