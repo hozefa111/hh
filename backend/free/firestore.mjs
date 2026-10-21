@@ -26,8 +26,15 @@ export class Firestore {
  }
  async get(path,transaction){
   const name=this.name(path);
-  if(transaction){const rows=await this.request(':batchGet','POST',{documents:[name],transaction}),doc=rows.find(r=>r.found)?.found;return doc?decode({mapValue:{fields:doc.fields||{}}}):null;}
-  try{const d=await this.request('/'+path);return decode({mapValue:{fields:d.fields||{}}});}catch(e){if(e.status===404)return null;throw e;}
+  if(transaction){const rows=await this.request(':batchGet','POST',{documents:[name],transaction}),doc=rows.find(r=>r.found)?.found;if(!doc)return null;const data=decode({mapValue:{fields:doc.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:doc.updateTime||null});return data;}
+  try{const d=await this.request('/'+path);const data=decode({mapValue:{fields:d.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:d.updateTime||null});return data;}catch(e){if(e.status===404)return null;throw e;}
+ }
+ async scan(collection,after,limit=100,transaction){
+  const structuredQuery={from:[{collectionId:collection.split('/').at(-1)}],orderBy:[{field:{fieldPath:'__name__'},direction:'ASCENDING'}],limit};
+  if(after)structuredQuery.startAt={before:false,values:[{referenceValue:this.name(collection+'/'+after)}]};
+  const parent=collection.includes('/')?'/'+collection.slice(0,collection.lastIndexOf('/')):'';
+  const rows=await this.request(parent+':runQuery','POST',{structuredQuery,...(transaction?{transaction}:{})});
+  return rows.filter(r=>r.document).map(({document:d})=>({id:d.name.split('/').at(-1),data:decode({mapValue:{fields:d.fields||{}}}),version:d.updateTime||null}));
  }
  set(path,value,create=false){return {update:{name:this.name(path),fields:encode(value).mapValue.fields},...(create?{currentDocument:{exists:false}}:{})};}
  delete(path){return {delete:this.name(path)};}

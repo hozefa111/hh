@@ -9,3 +9,14 @@ test('waiting members see workflow but no private cards or secret state',async()
 test('guest cannot forge score, seat, profile or administrator role',async()=>{const db=env.authenticatedContext('guest').firestore();for(const path of ['rounds/forged','players/forged','admins/guest','onlineRooms/r1','onlineRooms/r1/members/guest','onlineState/r1'])await assertFails(setDoc(doc(db,path),{source:'manual',scoreChanges:{p1:9999}}));await assertFails(getDoc(doc(db,'onlineCodes/ABCDEFGH')));});
 test('existing administrators retain manual writes, cannot modify online records',async()=>{const db=env.authenticatedContext('owner').firestore();await assertSucceeds(setDoc(doc(db,'rounds/manual_new'),{type:'hukum',source:'manual'}));await assertSucceeds(updateDoc(doc(db,'rounds/legacy'),{bid:180}));await assertSucceeds(setDoc(doc(db,'players/p_new'),{name:'New'}));await assertFails(setDoc(doc(db,'rounds/forged_online'),{source:'online'}));await assertFails(updateDoc(doc(db,'rounds/online_r1'),{scoreChanges:{p1:999}}));await assertFails(deleteDoc(doc(db,'rounds/online_r1')));await assertFails(deleteDoc(doc(db,'sessions/online_session')));});
 test('unadmitted identity cannot read rooms or list private membership',async()=>{const db=env.authenticatedContext('stranger').firestore();await assertFails(getDoc(doc(db,'onlineRooms/r1')));await assertFails(getDocs(collection(db,'onlineRooms')));await assertFails(getDocs(collection(db,'onlineRooms/r1/members')));});
+test('session cascade locks manual history writes and keeps recovery data server-private',async()=>{
+ const db=env.authenticatedContext('owner').firestore();
+ await env.withSecurityRulesDisabled(async ctx=>{const seed=ctx.firestore();await setDoc(doc(seed,'meta/sessionDeletionLock'),{sessionId:'deleting'});await setDoc(doc(seed,'sessionDeletionArchives/deleting_gen/rounds/old'),{scoreChanges:{p1:100}});});
+ try{
+  await assertSucceeds(getDoc(doc(db,'rounds/legacy')));
+  await assertFails(updateDoc(doc(db,'rounds/legacy'),{bid:200}));await assertFails(deleteDoc(doc(db,'rounds/legacy')));
+  await assertFails(setDoc(doc(db,'rounds/racing_manual'),{source:'manual'}));await assertFails(setDoc(doc(db,'sessions/racing_session'),{sessionName:'Racing'}));
+  await assertFails(deleteDoc(doc(db,'meta/sessionDeletionLock')));await assertFails(getDoc(doc(db,'sessionDeletionArchives/deleting_gen/rounds/old')));await assertFails(getDoc(doc(db,'sessionDeletions/deleting')));
+ }finally{await env.withSecurityRulesDisabled(ctx=>deleteDoc(doc(ctx.firestore(),'meta/sessionDeletionLock')));}
+ await assertSucceeds(updateDoc(doc(db,'rounds/legacy'),{bid:180}));
+});

@@ -26,6 +26,7 @@ class RestMemory {
   if(suffix===':beginTransaction')return Response.json({transaction:'memory'});
   if(suffix===':rollback')return Response.json({});
   if(suffix===':batchGet'){const name=body.documents[0],fields=this.docs.get(name.split('/documents/')[1]);return Response.json([fields?{found:{name,fields}}:{missing:name}]);}
+  if(suffix.endsWith(':runQuery')){const q=body.structuredQuery,col=suffix.slice(1,-9),prefix=(col?col+'/':'')+q.from[0].collectionId+'/',after=q.startAt?.values[0].referenceValue.split('/documents/')[1];const docs=[...this.docs.entries()].filter(([k])=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')&&(!after||k>after)).sort(([a],[b])=>a<b?-1:a>b?1:0).slice(0,q.limit).map(([k,fields])=>({document:{name:'projects/demo/databases/(default)/documents/'+k,fields}}));return Response.json(docs);}
   if(suffix===':commit'){
    for(const w of body.writes)if(w.currentDocument?.exists===false&&this.docs.has(w.update.name.split('/documents/')[1]))return Response.json({error:{status:'ALREADY_EXISTS'}},{status:409});
    for(const w of body.writes){const key=(w.update?.name||w.delete).split('/documents/')[1];if(w.delete)this.docs.delete(key);else this.docs.set(key,w.update.fields);}
@@ -85,24 +86,35 @@ test('REST profile linking cannot steal a previously linked human identity',asyn
  assert.equal(f.rooms.get(f.roomId).members.b.approved,false);
 });
 
-test('online rename stays synchronized; stopped-session deletion preserves scored rounds and is exactly once',async()=>{
- const f=await fixture(4);const meta=(action,name,extra={})=>f.service.history(f.who,{sessionId:f.roomId,action,name,commandId:'history_'+crypto.randomUUID(),...extra});
- await meta('rename','Friday game');assert.equal(f.memory.get('onlineRooms/'+f.roomId).sessionName,'Friday game');assert.equal(f.memory.get('onlineMemberships/admin/rooms/'+f.roomId).sessionName,'Friday game');
- await assert.rejects(meta('delete'),/Stop the online session/);
- for(let seat=2;seat<=4;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});
- let steps=0;while(R.active(f.rooms.get(f.roomId))){assert(++steps<160);const r=f.rooms.get(f.roomId),h=r.hand;if(h.deadline!==null){f.time(h.deadline);await f.service.due(r.id,h.id,h.turnGeneration);}else await f.send(h.turn,B.decide(R.publicState(r),h.turn,R.privateState(r,h.turn).cards));}
- assert.equal(f.memory.get('sessions/'+f.roomId).sessionName,'Friday game');
- await assert.rejects(meta('rename','Other',{expectedName:'Stale name'}),/changed/);
- await f.send('admin',{type:'stop'});const roundPath='rounds/online_'+f.rooms.get(f.roomId).hand.id,round=f.memory.get(roundPath),totals=f.rooms.get(f.roomId).totals;
- const commandId='history_delete_123';await meta('delete',undefined,{commandId,expectedName:'Friday game'});await meta('delete',undefined,{commandId,expectedName:'Friday game'});
- assert.equal(f.memory.get('sessions/'+f.roomId),null);assert.equal(f.memory.get('onlineMemberships/admin/rooms/'+f.roomId),null);assert.deepEqual(f.memory.get(roundPath),round);assert.deepEqual(f.rooms.get(f.roomId).totals,totals);assert(f.rooms.get(f.roomId).historyDeleted);
- await assert.rejects(meta('rename','Resurrect'),/already deleted/);
- const before=f.rooms.get(f.roomId);for(const w of f.store.projection(before,before))assert(!w.update?.name.includes('/sessions/'));
- await assert.rejects(meta('rename','Changed',{commandId}),/already used/);
+test('session deletion rejects older metadata-only clients before deleting any data',async()=>{const f=await fixture(4);await f.send('admin',{type:'stop'});await assert.rejects(f.service.history(f.who,{sessionId:f.roomId,action:'delete',commandId:'old_client_123'}),/Update the app/);assert(f.memory.get('sessions/'+f.roomId));});
+
+async function cascade(f,sessionId){const preview=await f.service.history(f.who,{sessionId,action:'previewDelete',commandId:'preview_'+crypto.randomUUID()});let result,steps=0;do{assert(++steps<100);result=await f.service.history(f.who,{sessionId,action:'delete',deleteRounds:true,previewToken:preview.previewToken,commandId:'delete_'+crypto.randomUUID()});}while(result.pending);return {preview,result};}
+test('large manual cascade removes only its rounds and score contributions; retry/archive/profile preservation',async()=>{
+ const f=await fixture(4);f.memory.put('sessions/manual',{sessionName:'Manual',startTime:new Date(1000),endTime:new Date(2000),leaderboard:[{id:'pa',name:'Human A'}]});f.memory.put('sessions/other',{sessionName:'Other',startTime:new Date(3000),endTime:new Date(4000)});
+ for(let i=0;i<620;i++)f.memory.put('rounds/r'+String(i).padStart(4,'0'),{sessionId:'manual',scoreChanges:{pa:i%2?-180:360},timestamp:new Date(1500)});
+ f.memory.put('rounds/legacy',{scoreChanges:{pa:-78},timestamp:new Date(1500)});f.memory.put('rounds/other',{sessionId:'other',scoreChanges:{pa:999},timestamp:new Date(1500)});f.memory.put('rounds/online_other',{sessionId:'online_other',source:'online',scoreChanges:{pa:300},timestamp:new Date(1500)});
+ const before=f.memory.get('rounds/other'),profile=f.memory.get('players/pa');const {preview,result}=await cascade(f,'manual');assert.equal(preview.roundCount,621);assert.equal(preview.impacts[0].lifetimeChange,-(310*180-78));assert.equal(result.deletedRounds,621);
+ assert.equal(f.memory.get('sessions/manual'),null);assert.deepEqual(f.memory.get('rounds/other'),before);assert(f.memory.get('rounds/online_other'));assert.deepEqual(f.memory.get('players/pa'),profile);assert.equal(f.memory.get('meta/sessionDeletionLock'),null);
+ const done=await f.service.history(f.who,{sessionId:'manual',action:'delete',deleteRounds:true,previewToken:preview.previewToken,commandId:'retry_delete_123'});assert.equal(done.pending,false);assert.equal(done.deletedRounds,621);assert.equal([...f.memory.docs.keys()].filter(k=>k.startsWith('sessionDeletionArchives/')&&k.includes('/rounds/')).length,621);
 });
-test('legacy online session metadata can be renamed/deleted without modifying manual records or lifetime rounds',async()=>{
- const f=await fixture(4);f.memory.put('sessions/legacy',{source:'online',sessionName:'Old online',endTime:new Date(1000),leaderboard:[{name:'A',score:360}]});f.memory.put('sessions/manual',{sessionName:'Manual',endTime:new Date(1000)});
- await f.service.history(f.who,{sessionId:'legacy',action:'rename',name:'Renamed',commandId:'rename_legacy_123',expectedName:'Old online'});assert.equal(f.memory.get('sessions/legacy').sessionName,'Renamed');
- await f.service.history(f.who,{sessionId:'legacy',action:'delete',commandId:'delete_legacy_123'});assert.equal(f.memory.get('sessions/legacy'),null);assert.equal(f.memory.get('sessions/manual').sessionName,'Manual');
- await assert.rejects(f.service.history(f.who,{sessionId:'manual',action:'delete',commandId:'delete_manual_123'}),/Online session not found/);
+test('online cascade removes unified rounds, room hand history and memberships, preserves another session and human identity',async()=>{
+ const f=await fixture(4);await f.send('admin',{type:'stop'});const r=f.rooms.get(f.roomId);f.memory.put('rounds/online_hand',{source:'online',sessionId:f.roomId,scoreChanges:{pa:-155,bot_2:-78},participants:[{playerId:'pa',name:'Human A',kind:'human'},{playerId:'bot_2',name:'Computer',kind:'bot'}]});f.memory.put('onlineRooms/'+f.roomId+'/hands/hand',{scoreChanges:{pa:-155}});f.memory.put('rounds/preserve',{sessionId:'elsewhere',scoreChanges:{pa:123}});
+ const {preview,result}=await cascade(f,f.roomId);assert.equal(preview.impacts.length,1);assert.equal(preview.impacts[0].lifetimeChange,155);assert.equal(result.deletedRounds,1);for(const path of ['sessions/'+f.roomId,'rounds/online_hand','onlineRooms/'+f.roomId,'onlineRooms/'+f.roomId+'/hands/hand','onlineMemberships/admin/rooms/'+f.roomId,'onlineRooms/'+f.roomId+'/private/admin'])assert.equal(f.memory.get(path),null,path);assert(f.memory.get('onlineState/'+f.roomId).historyDeleted);assert(f.memory.get('rounds/preserve'));assert(f.memory.get('players/pa'));
+});
+test('changed preview and overlapping legacy sessions reject before mutation; server resumes after restart',async()=>{
+ const f=await fixture(4);f.memory.put('sessions/m',{sessionName:'M',startTime:new Date(1000),endTime:new Date(2000)});f.memory.put('rounds/a',{sessionId:'m',scoreChanges:{pa:100}});const preview=await f.service.history(f.who,{sessionId:'m',action:'previewDelete',commandId:'preview_stale_123'});f.memory.put('rounds/a',{sessionId:'m',scoreChanges:{pa:200}});await assert.rejects(f.service.history(f.who,{sessionId:'m',action:'delete',deleteRounds:true,previewToken:preview.previewToken,commandId:'delete_stale_123'}),/rounds changed/);assert(f.memory.get('rounds/a'));assert.equal(f.memory.get('meta/sessionDeletionLock'),null);
+ f.memory.put('rounds/legacy_overlap',{timestamp:new Date(1500),scoreChanges:{pa:1}});f.memory.put('sessions/overlap',{sessionName:'Overlap',startTime:new Date(1200),endTime:new Date(1800)});await assert.rejects(f.service.history(f.who,{sessionId:'m',action:'previewDelete',commandId:'preview_overlap_123'}),/multiple sessions/);f.memory.docs.delete('sessions/overlap');
+ const p=await f.service.history(f.who,{sessionId:'m',action:'previewDelete',commandId:'preview_resume_123'});await f.service.history(f.who,{sessionId:'m',action:'delete',deleteRounds:true,previewToken:p.previewToken,commandId:'begin_resume_123'});
+ const restarted=new GameStore(f.db,async()=>{});let result;do{result=await restarted.deletion.step('m');}while(result.pending);assert.equal(result.deletedRounds,2);assert.equal(f.memory.get('meta/sessionDeletionLock'),null);
+});
+test('restored manual history requires a new preview and preserves the earlier recovery archive',async()=>{
+ const f=await fixture(4),session={sessionName:'Restored',startTime:new Date(1000),endTime:new Date(2000)};
+ f.memory.put('sessions/restored',session);f.memory.put('rounds/restored_round',{sessionId:'restored',scoreChanges:{pa:100}});
+ const first=await cascade(f,'restored'),oldJob=f.memory.get('sessionDeletions/restored');
+ f.memory.put('sessions/restored',session);f.memory.put('rounds/restored_round',{sessionId:'restored',scoreChanges:{pa:-40}});
+ await assert.rejects(f.service.history(f.who,{sessionId:'restored',action:'delete',deleteRounds:true,previewToken:first.preview.previewToken,commandId:'stale_restore_123'}),/rounds changed/);
+ assert(f.memory.get('rounds/restored_round'));
+ const second=await cascade(f,'restored');assert.equal(second.preview.impacts[0].lifetimeChange,40);
+ assert.notEqual(f.memory.get('sessionDeletions/restored').generation,oldJob.generation);
+ assert.equal([...f.memory.docs.keys()].filter(k=>k.startsWith('sessionDeletionArchives/restored_')&&k.includes('/rounds/')).length,2);
 });

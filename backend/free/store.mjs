@@ -1,7 +1,8 @@
 import R from '../../functions/online/shared/engine.js';
+import deletion from '../../functions/online/deletion.js';
 import metadata from '../../functions/online/metadata.js';
 export class GameStore {
- constructor(db,track){this.db=db;this.track=track;}
+ constructor(db,track,trackDeletion){this.db=db;this.track=track;this.deletion=new deletion.SessionDeletion(db,trackDeletion);}
  profile(id){return id&&/^[-a-zA-Z0-9_]{1,128}$/.test(id)?this.db.get('players/'+id):null;}
  async lookup(code){if(!/^[A-Z2-9]{8}$/.test(code))throw Error('Room not found');return (await this.db.get('onlineCodes/'+code))?.roomId;}
  async links(tx,before,next){

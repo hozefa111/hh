@@ -34,7 +34,10 @@ class GameService{
   if(!identity.admin)throw new Error('Admin access required');
   if(!/^[a-zA-Z0-9_-]{1,100}$/.test(request.sessionId||''))throw new Error('Invalid session');
   if(!/^[a-zA-Z0-9_-]{8,100}$/.test(request.commandId||''))throw new Error('Command ID required');
-  if(!['rename','delete'].includes(request.action))throw new Error('Invalid session action');
+  if(!['rename','delete','previewDelete'].includes(request.action))throw new Error('Invalid session action');
+  if(request.action==='delete'&&(request.deleteRounds!==true||!/^[a-f0-9]{64}$/.test(request.previewToken||'')))throw new Error('Update the app: session deletion now removes its rounds and points.');
+  if(request.action==='previewDelete')return this.store.deletion.preview(request.sessionId,request.expectedName??null);
+  if(request.action==='delete')return this.store.deletion.execute(identity.uid,{sessionId:request.sessionId,expectedName:request.expectedName??null,previewToken:request.previewToken});
   const name=typeof request.name==='string'?request.name.trim():'';if(request.action==='rename'&&(!name||name.length>80))throw new Error('Session name must be 1–80 characters');
   return this.store.history(identity.uid,{sessionId:request.sessionId,action:request.action,name,expectedName:request.expectedName??null,commandId:request.commandId});
  }

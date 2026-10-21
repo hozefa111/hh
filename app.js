@@ -2108,14 +2108,14 @@ window.cancelEditSession = function() {
     renderPastSessions();
 };
 
-async function onlineSessionHistory(session,action,name) {
+async function onlineSessionHistory(session,action,name,extra={}) {
     const endpoint=trackerEmulator?'http://'+location.hostname+':5001/demo-three-patti/asia-south1/':window.KALI_API_BASE;
     if(!endpoint||!auth.currentUser)throw new Error('Sign in and reconnect before changing this session');
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
     try {
         const token=await auth.currentUser.getIdToken();
-        const response=await fetch(endpoint+'kaliApi',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({operation:'sessionHistory',sessionId:session.id,action,name,expectedName:session.sessionName??null,commandId:crypto.randomUUID()}),signal:controller.signal});
-        const result=await response.json();if(!response.ok)throw new Error(result.error||'Session update failed');
+        const response=await fetch(endpoint+'kaliApi',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({operation:'sessionHistory',sessionId:session.id,action,name,expectedName:session.sessionName??null,commandId:crypto.randomUUID(),...extra}),signal:controller.signal});
+        const result=await response.json();if(!response.ok)throw new Error(result.error||'Session update failed');return result;
     } finally {clearTimeout(timer);}
 }
 window.saveSessionName = async function(id) {
@@ -2140,18 +2140,18 @@ window.saveSessionName = async function(id) {
     }
 };
 
-window.deleteSession = function(id) {
-    const session=sessions.find(s=>s.id===id);
-    showConfirm('Delete this session summary? Saved rounds and lifetime scores will stay. This cannot be undone.', 'Delete', async () => {
-        try {
-            if(session?.source==='online')await onlineSessionHistory(session,'delete');
-            else await db.collection('sessions').doc(id).delete();
-            showToast('Session deleted');
-        } catch (err) {
-            console.error('Error deleting session:', err);
-            showToast(err.message||'Failed to delete session');
-        }
-    });
+window.deleteSession = async function(id) {
+    const session=sessions.find(s=>s.id===id);if(!session||!isAdminUser)return;
+    try {
+        const preview=await onlineSessionHistory(session,'previewDelete');
+        const impacts=preview.impacts.map(p=>p.name+': '+(p.lifetimeChange>0?'+':'')+p.lifetimeChange).join(' · ');
+        showConfirm('Delete "'+preview.sessionName+'" and ALL '+preview.roundCount+' rounds? These rounds and their points will be removed. Lifetime changes: '+(impacts||'0 points')+'. Other sessions stay unchanged.', 'Delete session & rounds', async()=>{
+            try{
+                let result;do{result=await onlineSessionHistory(session,'delete',null,{deleteRounds:true,previewToken:preview.previewToken});if(result.pending)await new Promise(resolve=>setTimeout(resolve,1000));}while(result.pending);
+                showToast('Session, '+result.deletedRounds+' rounds and their points deleted');
+            }catch(err){showToast(err.message||'Deletion interrupted. It will resume on the server; refresh to check.');}
+        });
+    } catch(err){showToast(err.message||'Could not preview session deletion');}
 };
 
 window.viewSessionSummary = function(sessionId) {

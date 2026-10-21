@@ -19,11 +19,11 @@ export default {async fetch(request,env){
 }};
 export class KaliCoordinator extends DurableObject {
  constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.queue=Promise.resolve();
-  this.store=new GameStore(this.db,(...args)=>this.track(...args));this.service=new serviceModule.GameService(this.store,{random,id,code});
+  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});
   ctx.blockConcurrencyWhile(async()=>{
    const rooms=await this.storage.list({prefix:'room:'});
    for(const [key,r]of rooms)await this.storage.put(key,{id:r.id,recover:true});
-   if(rooms.size)await this.storage.setAlarm(Date.now()+100);
+   if(rooms.size||(await this.storage.list({prefix:'delete:'})).size)await this.storage.setAlarm(Date.now()+100);
   });
  }
  serial(fn){const result=this.queue.then(fn);this.queue=result.catch(()=>{});return result;}
@@ -38,8 +38,9 @@ export class KaliCoordinator extends DurableObject {
   else if(!await this.storage.get(key))await this.storage.put(key,{id:roomId,recover:true});
   await this.arm();
  }
+ async trackDeletion(id,active){if(active){await this.storage.put('delete:'+id,{id});await this.cleanupAlarm(Date.now()+1000);}else await this.storage.delete('delete:'+id);}
  async arm(){
-  const rooms=await this.storage.list({prefix:'room:'});let at=Infinity;
+  const rooms=await this.storage.list({prefix:'room:'});let at=(await this.storage.list({prefix:'delete:'})).size?Date.now()+1000:Infinity;
   for(const r of rooms.values()){
    at=Math.min(at,Date.now()+(R.active(r)&&!r.paused?5000:30000));
    if(!r.paused&&R.active(r)&&r.hand.deadline!==null)at=Math.min(at,r.hand.deadline);
@@ -82,6 +83,7 @@ export class KaliCoordinator extends DurableObject {
  }
  async alarm(){return this.serial(async()=>{
   try{
+   for(const {id}of(await this.storage.list({prefix:'delete:'})).values())await this.store.deletion.step(id);
    const rooms=await this.storage.list({prefix:'room:'});
    // One server read serves every tracked room. No private card state enters RTDB.
    const presence=rooms.size?await this.realtime('/onlinePresence'):null;

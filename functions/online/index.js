@@ -57,6 +57,13 @@ const store={
   writeRoom(tx,before,next,links);if(receipt)tx.create(receipt,{fingerprint,result,createdAt:FieldValue.serverTimestamp()});return result;
  })
 };
+const deletionDb={
+ get:async(path,tx)=>{const s=await(tx?tx.get(db.doc(path)):db.doc(path).get());if(!s.exists)return null;const data=s.data();Object.defineProperty(data,'_cascadeVersion',{value:s.updateTime?.toDate().toISOString()||null});return data;},
+ scan:async(collection,after,limit,tx)=>{let q=db.collection(collection).orderBy(require('firebase-admin/firestore').FieldPath.documentId()).limit(limit);if(after)q=q.startAfter(after);const s=await(tx?tx.get(q):q.get());return s.docs.map(d=>({id:d.id,data:d.data(),version:d.updateTime?.toDate().toISOString()||null}));},
+ set:(path,value)=>({path,value}),delete:path=>({path,remove:true}),
+ transaction:fn=>db.runTransaction(async tx=>{const {writes,result}=await fn(tx);for(const w of writes){if(w.remove)tx.delete(db.doc(w.path));else tx.set(db.doc(w.path),w.value);}return result;})
+};
+store.deletion=new(require('./deletion').SessionDeletion)(deletionDb);
 const service=new GameService(store,{random,id,code});
 async function realtime(path,method='GET',value,instance=getApp().options.projectId+'-default-rtdb'){
  const emulator=process.env.FIREBASE_DATABASE_EMULATOR_HOST;
@@ -117,4 +124,4 @@ exports.kaliPresence=onValueWritten({region:'us-central1',retry:true,ref:'/onlin
  await service.presence(event.params.roomId,event.params.uid,!!connections&&Object.keys(connections).length>0);
 });
 // Emulator-only scheduler: task queues are not supplied by Firebase emulators.
-if(process.env.FUNCTIONS_EMULATOR==='true')exports.kaliEmulatorTick=onRequest({region},async(req,res)=>{const rooms=await db.collection('onlineState').get();for(const s of rooms.docs){const r=s.data();if(r.hand)await applyDue({roomId:r.id,handId:r.hand.id,generation:r.hand.turnGeneration});}res.json({ok:true});});
+if(process.env.FUNCTIONS_EMULATOR==='true')exports.kaliEmulatorTick=onRequest({region},async(req,res)=>{const rooms=await db.collection('onlineState').get();for(const s of rooms.docs){const r=s.data();if(r.hand)await applyDue({roomId:r.id,handId:r.hand.id,generation:r.hand.turnGeneration});}const jobs=await db.collection('sessionDeletions').where('status','==','deleting').get();for(const job of jobs.docs)await store.deletion.step(job.id);res.json({ok:true});});
