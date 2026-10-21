@@ -19,6 +19,7 @@ class GameService{
   if(input.type==='reserve')input.reservationId='reserved_'+this.id();
   const key=uid+'_'+request.commandId, fingerprint=JSON.stringify({roomId,action:request.action,revision:request.revision,handId:request.handId,turnGeneration:request.turnGeneration});
   return this.store.transact(roomId,key,fingerprint,(room)=>{
+   for(const field of ['target','other'])if(input[field]!==undefined&&!Object.prototype.hasOwnProperty.call(room.members,input[field]))throw new Error('Not a room participant');
    const joining=input.type==='join';const gameAction=['bid','trump','partners','play'].includes(input.type),sameTurn=gameAction&&room.hand?.id===request.handId&&room.hand?.turnGeneration===request.turnGeneration;
    if(!joining&&request.revision!==room.revision&&!sameTurn)throw new Error('State changed. Please retry with the latest table.');
    if(['approve','reserve'].includes(input.type)&&input.playerId){const current=Object.values(room.members).find(p=>p.playerId===input.playerId&&p.uid!==input.target&&p.kind==='human'&&!p.reservation&&p.status!=='Removed');if(current)throw new Error('Profile already participating');}
