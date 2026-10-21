@@ -26,3 +26,78 @@
 @media(min-width:651px){.trick-flight .face{width:60px;height:88px}}
 
 .centre-trick{display:grid;grid-template-columns:repeat(2,max-content);width:max-content;gap:6px}.centre-trick[data-players="6"]{grid-template-columns:repeat(3,max-content)}.trick-flight{display:grid;grid-template-columns:repeat(var(--flight-cols,2),max-content)}
+
+/* The live table occupies the usable viewport. Supporting views use a drawer. */
+body.live-game{height:100vh;height:100dvh;min-height:0;overflow:hidden}
+.live-game #game{height:100%;display:flex;flex-direction:column;overflow:hidden}
+.live-game header{position:relative;flex:none;min-height:30px;padding:3px 10px;gap:5px}
+.live-game header .brand{font-size:18px}.live-game header .brand span{font-size:10px}
+.live-game header .quiet{min-height:26px;padding:3px 6px;font-size:9px}
+.live-game header .connection{font-size:8px;letter-spacing:0}
+.live-game footer{display:none}
+main.live-main{flex:1;min-height:0;width:100%;max-width:1040px;overflow:hidden;padding:4px 8px;display:grid;gap:2px;
+ grid-template-areas:'room' 'meta' 'partner' 'table' 'last' 'turn' 'hint' 'hand' 'controls' 'tools';
+ grid-template-rows:24px 30px auto minmax(112px,1fr) 14px 30px 11px auto 58px 28px}
+.live-main .room-head.live{grid-area:room;margin:0;padding:0;align-items:center;min-width:0;gap:8px}
+.live-main .room-head h1{font-size:12px;line-height:1.2;letter-spacing:0;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.live-main .room-actions{flex:none;gap:5px;flex-wrap:nowrap}
+.live-main .room-actions button{min-height:24px;padding:3px 8px;font-size:9px;border-radius:8px}
+.live-main .game-meta{grid-area:meta;padding:3px 8px;border-radius:9px;gap:6px}
+.live-main .game-meta span{font-size:7px;letter-spacing:.4px;min-width:0;overflow:hidden}
+.live-main .game-meta b{font-size:10px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-main .partner-status{grid-area:partner;margin:0;padding:2px 8px;border-radius:7px;gap:0;min-width:0;line-height:13px}
+.live-main .partner-status b{font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-main .partner-status span{display:none}
+.live-main .table-wrap{grid-area:table;min-height:0;padding:3px 0}
+.live-main .felt{height:100%;margin:0 10px;border-width:3px;min-height:0;box-shadow:inset 0 0 0 2px #ddc28a30,inset 0 0 40px #00180d,0 4px 12px #0005}
+.live-main .felt:after{inset:10px}
+.live-main .table-mark{font-size:11px;letter-spacing:1px}.live-main .table-mark small{font-size:7px;letter-spacing:1px}
+.live-main .table-seat{width:66px;padding:3px 2px;border-radius:9px;gap:0}
+.live-main .table-seat .avatar{display:none}
+.live-main .table-seat strong{font-size:10px;line-height:11px}
+.live-main .table-seat small{font-size:7px;line-height:8px;margin-top:1px;white-space:nowrap}
+.live-main .table-seat>span{font-size:7px;line-height:8px;min-height:0}.live-main .table-seat>span:empty{display:none}
+.live-main .centre-trick{gap:3px}.live-main .centre-trick[data-players='4']{grid-template-columns:repeat(4,max-content)}
+.live-main .centre-trick .face{width:28px;height:38px;border-radius:5px}
+.live-main .centre-trick .face b{font-size:11px;top:2px;left:3px}.live-main .centre-trick .face i{font-size:20px}
+.live-main .centre-trick .face small{font-size:5px;bottom:2px;right:2px}
+.live-main .played-card>small{font-size:6px;line-height:8px;max-width:28px;margin:1px 0 0}
+.live-main .automatic .face:after{font-size:5px;padding:1px}
+.live-main .last-trick{grid-area:last;font-size:9px;line-height:12px;margin:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.live-main .turn-bar{grid-area:turn;min-width:0;min-height:0;padding:2px 9px;border-radius:9px;gap:5px}
+.live-main .turn-label{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.live-main .turn-bar strong{font-size:8px;letter-spacing:.4px}
+.live-main .timer{width:26px;height:26px;border-width:2px;font-size:11px;flex:none}
+.live-main .hand-hint{grid-area:hint;margin:0;text-align:center;font-size:8px;line-height:11px}
+.live-main .my-hand{grid-area:hand;overflow:visible;min-height:0;padding:4px 2px 2px;scrollbar-width:none}
+.live-main .hand-fan{display:grid;grid-template-columns:repeat(var(--hand-cols),minmax(0,1fr));gap:5px;width:min(100%,540px);min-width:0;margin:auto;align-items:stretch}
+.live-main .hand-card,.live-main .hand-card:first-child{width:100%;height:clamp(49px,9vh,80px);height:clamp(49px,9dvh,80px);min-height:0;margin:0;transform:none;border-radius:7px}
+.live-main .hand-card .face{width:100%;height:100%;border-radius:7px}
+.live-main .hand-card .face b{font-size:17px;top:4px;left:5px}.live-main .hand-card .face i{font-size:28px}
+.live-main .hand-card .face small{font-size:6px;bottom:3px;right:4px}
+.live-main .hand-card.selected{transform:translateY(-3px);outline:2px solid var(--gold);outline-offset:1px}
+.live-main .hand-card.legal:hover{transform:translateY(-2px);background:none}
+.live-main .hand-card.dim{opacity:.55}
+.live-main .phase-area{grid-area:controls;min-width:0;min-height:0;overflow:visible}
+.live-main .phase-caption{margin:0;display:grid;place-items:center;height:100%;font-size:10px;text-align:center;line-height:1.25;color:#c6d4c9}
+.live-main .bid-timeout-note{margin:0;text-align:center;font-size:9px;line-height:12px;color:var(--gold)}
+.live-main .action-bar{margin:0;gap:6px;align-items:end}
+.live-main .phase-area label{margin:0;font-size:8px}
+.live-main .phase-area input,.live-main .phase-area select{min-height:32px;height:32px;padding:3px 6px;margin-top:1px;border-radius:8px;font-size:12px}
+.live-main .phase-area button{min-height:34px;height:34px;padding:4px 10px;font-size:11px;border-radius:9px;margin:0}
+.live-main .phase-area .suit-picker{grid-template-columns:repeat(4,1fr);gap:5px;align-items:center;height:100%}
+.live-main #partners{display:flex;align-items:end;gap:6px;height:100%}
+.live-main #partners label{flex:1;min-width:0}.live-main #partners p{display:none}.live-main #partners button{width:auto;flex:1}
+.live-main .play-confirm{align-items:center;height:100%}
+.live-main>.auction{display:none}
+.live-main .live-tools{grid-area:tools;display:flex;margin:0;gap:5px;min-width:0}
+.live-main .live-tools button{min-height:26px;height:26px;padding:2px 8px;font-size:10px;border-radius:8px;flex:1}
+.table-drawer{position:fixed;inset:38px 8px 8px;max-width:700px;margin:auto;background:#101f1bf9;border:1px solid #dab96466;border-radius:16px;z-index:24;display:flex;flex-direction:column;box-shadow:0 0 0 200vmax #000a,0 10px 60px #000b;min-height:0;overflow:hidden}
+.drawer-top{display:flex;justify-content:space-between;align-items:center;padding:9px 12px;border-bottom:1px solid var(--line);flex:none}
+.drawer-top button{min-height:34px;padding:5px 12px;font-size:12px}.drawer-body{overflow:auto;min-height:0;padding:10px 14px;overscroll-behavior:contain}
+.drawer-body .panel{margin:0 0 12px;padding:12px}.drawer-body .score-row{padding:12px 0}.drawer-body .management .toolbar{display:flex;margin:12px 0}
+@media(min-height:800px){.live-main .table-seat .avatar{display:grid;width:23px;height:23px;font-size:12px;margin-bottom:1px}.live-main .table-seat{width:76px}.live-main .centre-trick .face{width:36px;height:48px}.live-main .played-card>small{max-width:36px;font-size:7px}}
+@media(max-height:620px){.live-game header{min-height:28px;padding-top:1px;padding-bottom:1px}main.live-main{gap:1px;padding:3px 8px;grid-template-rows:22px 28px auto minmax(112px,1fr) 12px 28px 10px auto 52px 26px}.live-main .hand-card,.live-main .hand-card:first-child{height:49px}.live-main .phase-area button{height:32px;min-height:32px}.live-main .phase-area input,.live-main .phase-area select{height:30px;min-height:30px}}
+@media(max-height:550px) and (orientation:landscape){main.live-main{grid-template-columns:minmax(0,1fr) minmax(0,1fr);grid-template-areas:'room room' 'meta meta' 'table partner' 'table hand' 'table hand' 'turn controls' 'tools tools';grid-template-rows:22px 28px 16px minmax(0,1fr) 0 52px 26px;column-gap:10px}.live-main .hand-hint{display:none}.live-main .last-trick{grid-area:turn;align-self:end;z-index:1;font-size:8px}.live-main .turn-bar{align-self:start;height:30px}.live-main .table-wrap{min-height:90px}.live-main .partner-status{font-size:8px}.live-main .hand-fan{gap:4px}.live-main .hand-card,.live-main .hand-card:first-child{height:clamp(45px,16vh,65px)}.live-main .room-head h1{font-size:11px}}
+.live-main .phase-area>.panel{padding:0;margin:0;border:0;background:none;box-shadow:none;height:100%}.live-main .phase-area h2{display:none}
+.live-main>.error{position:fixed;top:36px;left:8px;right:8px;z-index:26;background:#352420;margin:0;font-size:12px}

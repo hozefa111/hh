@@ -14,7 +14,8 @@
     "test:native-origin": "node online/test/native-origin.browser.cjs",
     "test:table-feedback": "node online/test/table-feedback.browser.cjs",
     "test:session-deletion": "node online/test/session-deletion.browser.cjs",
-    "test:presence": "node online/test/presence.browser.cjs"
+    "test:presence": "node online/test/presence.browser.cjs",
+    "test:compact-table": "node online/test/compact-table.browser.cjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.3",
