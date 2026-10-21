@@ -331,6 +331,7 @@
       }
     } else if (type === "ready") {
       member(room, uid);
+      assert(!room.paused, "Session is paused");
       assert(!active(room) && p.seat !== null && p.approved && connected(p), "Cannot Ready now");
       if (uid === room.admin) {
         assert(allReadyExceptAdmin(room), "Other players must be Ready first");
@@ -342,16 +343,25 @@
       }
     } else if (type === "pause") {
       owner(room, uid);
-      pause(room, "admin", now);
+      if (active(room)) pause(room, "admin", now);
+      else {
+        room.paused = true;
+        room.pauseReason = "admin";
+      }
     } else if (type === "resume") {
       owner(room, uid);
-      assert(active(room) && room.paused, "Not paused");
-      assert(room.hand.seatMap.every((x) => connected(room.members[x.uid])), "A player is disconnected");
-      room.paused = false;
-      room.pauseReason = null;
-      const h = room.hand, remaining = h.remaining;
-      arm(room, now);
-      if (remaining !== null) h.deadline = now + remaining;
+      assert(room.paused, "Not paused");
+      if (active(room)) {
+        assert(room.hand.seatMap.every((x) => connected(room.members[x.uid])), "A player is disconnected");
+        room.paused = false;
+        room.pauseReason = null;
+        const h = room.hand, remaining = h.remaining;
+        arm(room, now);
+        if (remaining !== null) h.deadline = now + remaining;
+      } else {
+        room.paused = false;
+        room.pauseReason = null;
+      }
     } else if (type === "void") {
       owner(room, uid);
       assert(active(room), "No unfinished hand");

@@ -4,6 +4,14 @@ Live bidding, Hukum selection, partner selection and trick play use a viewport-s
 
 The room name/invitation/Stop Session, Hukum/contract/called card, revealed partner, table, last-trick result, turn countdown, complete hand and actions remain on the gameplay screen. Scores, full bidding/hand history and management open in closable drawers with internal scrolling. Existing controls, card highlighting, winner collection, reconnection and administrator permissions remain intact.
 
-Human auction turns retain the existing authoritative 30-second deadline and automatic permanent PASS. This is explicitly labelled beside the raise/PASS controls. Trump/partner selection remains untimed under the confirmed rules; card-playing timeouts retain automatic legal card play. No scoring formula or game rule changed.
+Human auction turns retain the existing authoritative 30-second deadline and automatic permanent PASS. This is explicitly labelled beside the bid/PASS controls. Trump/partner selection remains untimed under the confirmed rules; card-playing timeouts retain automatic legal card play. No scoring formula or game rule changed.
 
 Regression checks cover both player modes, all gameplay phases, partial tricks and selected-card confirmation at 320x568, 360x640, 390x844, 412x915, 740x360 and 1280x800. They inspect actual card/control bounds, no document overflow, no hand swipe and working score/history drawers. The dedicated service test verifies exact auction deadline, automatic timeout reason, permanent PASS and duplicate/late action rejection.
+
+Bidding uses English labels: an amount selector with adjacent minus/plus steps of five, an explicit `Bid 180` submit button and PASS. Stepping changes the draft only, bounded by the current minimum and 250. The shown submit amount follows selection changes and restored drafts.
+
+Optional Sound on/off is stored locally, defaults off and starts only after a user gesture. Synthesized low-volume cues cover dealing, cards, Hukum, partner reveal, captured tricks, own turns and final five-second warnings. Muting and hidden pages suppress sound; reduced motion does not disable sound. No audio download or microphone permission is needed. Browser tests verify cue generation and mute behavior; speaker quality is a physical-device check.
+
+The existing Android online Activity handles orientation/size changes without destroying the WebView. Landscape therefore preserves the live JavaScript table and identity instead of repeating sign-in. An Android instrumentation test verifies the same JavaScript sentinel survives rotation.
+
+Normal bots now take attainable opponent tricks even when their current points are low, protect vulnerable partner leads, conserve higher cards when a cheaper card suffices, and feed points only to a safely winning partner. They track completed/current public cards and inferred void suits, using only their own cards and public state. Targeted strategy regressions cover the Heart Ace example, a low-point missed trick, partner support/protection and conserving the Ace. This is a heuristic opponent, not an optimal-play guarantee. Easy difficulty stays intentionally simple.
