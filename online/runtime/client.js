@@ -252,7 +252,7 @@ async function api(body, endpoint = "kaliApi") {
 function disableControls() {
   renderedMarkup = null;
   root.querySelectorAll("button").forEach((b) => {
-    if (!localActions.has(b.dataset.action)) b.disabled = true;
+    if (!localActions.has(b.dataset.action) && !(b.dataset.action === "retry-move" && !busy)) b.disabled = true;
   });
 }
 async function submitMove(body) {
@@ -279,7 +279,7 @@ async function command(action) {
   var _a, _b;
   if (!room || busy) return;
   if (uncertainCommand) {
-    notice("Retry the pending move first. Its original command ID prevents duplicate actions.");
+    notice("Confirm your pending move before choosing another action.");
     return false;
   }
   if (!navigator.onLine) {
@@ -293,7 +293,7 @@ function seatConnected() {
   return !!(navigator.onLine && connectionReady && (me == null ? void 0 : me.connected) === true && me.status !== "Disconnected");
 }
 function recoveryPanel() {
-  if (room && (uncertainCommand == null ? void 0 : uncertainCommand.roomId) === room.id) return `<section class="connection-recovery" role="status"><span>Move confirmation pending. Retry safely with the same command.</span>${btn(busy ? "Sending\u2026" : "Retry pending move", "retry-move", busy)}</section>`;
+  if (room && (uncertainCommand == null ? void 0 : uncertainCommand.roomId) === room.id) return `<section class="connection-recovery" role="status"><span>Still waiting for confirmation. Retry your last move.</span>${btn(busy ? "Sending\u2026" : "Retry pending move", "retry-move", busy)}</section>`;
   return room && room.status !== "stopped" && !seatConnected() ? `<section class="connection-recovery" role="status"><span>${navigator.onLine ? "Restoring your seat\u2026" : "Offline \xB7 reconnect when internet returns"}</span>${btn(reconnectBusy ? "Retrying\u2026" : "\u21BB Reconnect", "reconnect", reconnectBusy)}</section>` : "";
 }
 function missingPlayers() {
@@ -576,7 +576,7 @@ function renderNow() {
       }
     }
   }
-  if (window.KALI_NATIVE_PENDING) disableControls();
+  if (window.KALI_NATIVE_PENDING || mutationBlocked()) disableControls();
   if (window.scrollY !== (live ? 0 : scroll)) window.scrollTo(0, live ? 0 : scroll);
   tick();
   animateCollection();
