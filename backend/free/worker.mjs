@@ -76,7 +76,7 @@ export class KaliCoordinator extends DurableObject {
     // Room actions use canonical room ownership, not the global tracker role.
     // Keep token revocation checks on every request; only avoid irrelevant reads.
     if(['create','sessionHistory','register'].includes(body.operation))who.admin=who.admin||!!await db.get('admins/'+who.uid);
-    let roomId=body.roomId||body.sessionId;
+    let roomId=body.operation==='sessionHistory'?body.sessionId:['create','register','exchange','clock'].includes(body.operation)?null:body.roomId;
     if(!body.operation&&body.action?.type==='join'&&!roomId){roomId=await store.lookup(String(body.code||'').trim().toUpperCase());body.roomId=roomId;}
     if(roomId&&!/^[a-zA-Z0-9_-]{1,100}$/.test(roomId))throw Error('Invalid room');
     const execute=async()=>{

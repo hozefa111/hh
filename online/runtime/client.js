@@ -62,8 +62,12 @@ function speedFrame() {
     const seated = (_a = room.hand) == null ? void 0 : _a.seatMap.some((p) => p.uid === uid());
     if (R.active(room) && seated && (own.handId !== room.hand.id || own.cards.length !== room.hand.counts[uid()])) continue;
     if (row.frameQueued) continue;
-    const at = speedSnapshots.get(row.room + ":" + row.revision);
+    let at = speedSnapshots.get(row.room + ":" + row.revision);
+    if (at === void 0) {
+      for (const [key, time] of speedSnapshots) if (key.startsWith(row.room + ":") && Number(key.slice(row.room.length + 1)) >= row.revision) at = at === void 0 ? time : Math.min(at, time);
+    }
     if (at === void 0) continue;
+    at = Math.max(row.started, at);
     row.stages.snapshot = Math.max(0, at - row.started);
     row.frameQueued = true;
     requestAnimationFrame(() => requestAnimationFrame(() => {
