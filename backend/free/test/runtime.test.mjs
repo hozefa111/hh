@@ -6,7 +6,7 @@ import {generateKeyPair,exportJWK,exportPKCS8,SignJWT} from 'jose';
 import {Firestore} from '../firestore.mjs';
 import R from '../../../functions/online/shared/engine.js';
 import B from '../../../functions/online/shared/bot.js';
-test('actual Worker runtime enforces origins/auth and completes a bot game through durable alarms', {skip:!process.env.KALI_WORKER_INTEGRATION,timeout:300000},async()=>{
+for(const mode of [4,6])test(mode+'-seat actual Worker enforces origins/auth, isolates rooms and completes a bot game through durable alarms', {skip:!process.env.KALI_WORKER_INTEGRATION,timeout:300000},async()=>{
  const emulator=process.env.FIRESTORE_EMULATOR_HOST;assert.match(emulator||'',/^(127\.0\.0\.1|localhost):\d+$/);
  const project='demo-three-patti',profile='worker_'+crypto.randomUUID().replaceAll('-',''),uid='uid_'+profile,created=new Set;
  const {publicKey,privateKey}=await generateKeyPair('RS256',{extractable:true}),jwk=await exportJWK(publicKey);Object.assign(jwk,{kid:'test-key',alg:'RS256',use:'sig'});
@@ -14,7 +14,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
  await db.request(':commit','POST',{writes:[db.set('players/'+profile,{name:'Worker human test'},true)]});created.add('players/'+profile);await db.request(':commit','POST',{writes:[db.set('admins/'+uid,{admin:true},true)]});created.add('admins/'+uid);
  let roomId;const samples=[];
  let held=null;const wait=()=>{let release,entered;const promise=new Promise(r=>release=r),seen=new Promise(r=>entered=r);return {promise,release,entered,seen};};
- const presence={},globalPresenceReads=[];let adminReads=0,identityChecks=0,presenceFailures=0;const failedScans=[];
+ const presence={},globalPresenceReads=[];let adminReads=0,identityChecks=0,presenceFailures=0,disabled=false,revoked=false;const failedScans=[];
  const miniflare=new Miniflare(convertV4MiniflareOptions({name:'kali-test',modules:true,script:await readFile(new URL('../dist/worker.mjs',import.meta.url),'utf8'),compatibilityDate:'2026-03-01',
   durableObjects:{KALI_COORDINATOR:{className:'KaliCoordinator',useSQLite:true}},
   bindings:{FIREBASE_PROJECT_ID:project,FIREBASE_SERVICE_ACCOUNT:JSON.stringify({project_id:project,client_email:'test@demo-three-patti.iam.gserviceaccount.com',private_key})},
@@ -28,7 +28,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
    }
    if(url.hostname==='www.googleapis.com'&&url.pathname.includes('/jwk/'))return Response.json({keys:[jwk]},{headers:{'Cache-Control':'public, max-age=3600'}});
    if(url.hostname==='oauth2.googleapis.com')return Response.json({access_token:'test-only',expires_in:3600});
-   if(url.hostname==='identitytoolkit.googleapis.com'){identityChecks++;const id=JSON.parse(text).localId[0];if(held?.kind==='auth'&&id==='slow_uid'){held.entered();await held.promise;}return Response.json({users:[{localId:id,validSince:'0'}]});}
+   if(url.hostname==='identitytoolkit.googleapis.com'){identityChecks++;const id=JSON.parse(text).localId[0];if(held?.kind==='auth'&&id==='slow_uid'){held.entered();await held.promise;}return Response.json({users:[{localId:id,disabled,validSince:revoked?String(Math.floor(Date.now()/1000)+60):'0'}]});}
    if(url.hostname===project+'-default-rtdb.firebaseio.com'){
     if(request.method==='PUT')return Response.json(true);
     if(/^\/onlinePresence\/[^/]+\.json$/.test(url.pathname)&&url.pathname.includes('/'+roomId+'.json')){globalPresenceReads.push(Date.now());if(presenceFailures>0){presenceFailures--;failedScans.push(Date.now());return Response.json({error:'Injected temporary presence outage'},{status:503});}}
@@ -49,9 +49,16 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
    samples.push({operation:body.operation||body.action?.type||'exchange',requestMs:performance.now()-started,serverTiming:res.headers.get('Server-Timing'),heldDependency:held?.kind||null});
    assert.equal(res.headers.get('Access-Control-Allow-Origin'),'https://appassets.androidplatform.net');assert.equal(res.status,200,JSON.stringify(value));assert.match(res.headers.get('Server-Timing'),/auth;dur=/);assert.match(res.headers.get('X-Request-ID'),/^[a-f0-9-]{36}$/);assert.match(res.headers.get('Access-Control-Expose-Headers'),/Server-Timing/);return value;
   };
+  for(const type of ['disabled','revoked']){
+   if(type==='disabled')disabled=true;else revoked=true;
+   const rejected=await miniflare.dispatchFetch('http://worker/kaliApi',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({operation:'clock'})});assert.equal(rejected.status,400,'Account changes apply without a cached-permission window');disabled=false;revoked=false;
+  }
+  const quotaToken=await new SignJWT({user_id:'quota_uid',auth_time:Math.floor(Date.now()/1000)}).setProtectedHeader({alg:'RS256',kid:'test-key'}).setSubject('quota_uid').setIssuer('https://securetoken.google.com/'+project).setAudience(project).setIssuedAt().setExpirationTime('1h').sign(privateKey);
+  const quota=await Promise.all(Array.from({length:91},()=>miniflare.dispatchFetch('http://worker/kaliApi',{method:'POST',headers:{Authorization:'Bearer '+quotaToken},body:JSON.stringify({operation:'clock'})})));
+  assert.equal(quota.filter(r=>r.status===200).length,90);assert.equal(quota.filter(r=>r.status===400).length,1,'Concurrent rate increments cannot be lost');
   const {exchange}=await api({operation:'exchange'});const consumeRequests=await Promise.all([1,2].map(()=>miniflare.dispatchFetch('http://worker/kaliConsumeExchange',{method:'POST',body:JSON.stringify({exchange})})));assert.deepEqual(consumeRequests.map(r=>r.status).sort(),[200,400]);
   const replay=await miniflare.dispatchFetch('http://worker/kaliConsumeExchange',{method:'POST',body:JSON.stringify({exchange})});assert.equal(replay.status,400);
-  ({roomId}=await api({operation:'create',playerId:profile,mode:6}));presence[roomId]={[uid]:{connections:{test:true}}};
+  ({roomId}=await api({operation:'create',playerId:profile,mode}));presence[roomId]={[uid]:{connections:{test:true}}};
   await api({operation:'presenceAccess',roomId});
   assert.equal((await api({operation:'presenceSync',roomId})).connected,true);
   presence[roomId][uid].connections={};assert.equal((await api({operation:'presenceSync',roomId,connected:true})).connected,false);
@@ -72,7 +79,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   }
   const other=await db.get('onlineState/'+second);await api({roomId:second,commandId:crypto.randomUUID(),revision:other.revision,action:{type:'stop'}});
   const send=async action=>{const r=await db.get('onlineState/'+roomId);return api({roomId,commandId:crypto.randomUUID(),revision:r.revision,handId:r.hand?.id,turnGeneration:r.hand?.turnGeneration,action});};
-  for(let seat=2;seat<=6;seat++)await send({type:'bot',seat});await send({type:'ready'});
+  for(let seat=2;seat<=mode;seat++)await send({type:'bot',seat});await send({type:'ready'});
   assert(adminReads>=1);const gameAdminReads=adminReads;
   // Disconnect scanning remains authoritative while bot alarms reuse its cadence.
   presenceFailures=1;presence[roomId][uid].connections={};const pauseBy=Date.now()+15000;let paused;while(Date.now()<pauseBy){paused=await db.get('onlineState/'+roomId);if(paused.paused)break;await new Promise(r=>setTimeout(r,150));}assert(paused.paused,'A real disconnect pauses after a transient presence failure recovers');assert.equal(failedScans.length,1);const afterFailure=globalPresenceReads.find(t=>t>failedScans[0]+100);assert(afterFailure-failedScans[0]>=4500,'An overdue turn cannot override server retry backoff');const pausedCards=JSON.stringify(paused.hand.hands);presence[roomId][uid].connections={test:true};await api({operation:'presenceSync',roomId});await send({type:'resume'});assert.equal(JSON.stringify((await db.get('onlineState/'+roomId)).hand.hands),pausedCards);
@@ -104,6 +111,6 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   const until=Date.now()+20000;while(await db.get('sessions/'+roomId)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,300));
   assert.equal(await db.get('sessions/'+roomId),null);assert.equal(await db.get('rounds/online_'+room.hand.id),null);assert.equal(await db.get('meta/sessionDeletionLock'),null);
 
-  await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/backend-performance-report.json',JSON.stringify({scope:'Actual Miniflare Worker and local Firestore emulator; external identity/presence endpoints are isolated mocks, not physical-phone or production WAN timings',checks:['Room B completes while room A authentication is held','Room B completes while room A database is held','Room B completes while room A presence is held','Concurrent one-use exchange admits exactly one consumer','Real bot alarms, disconnect/reconnect and human timeout finish a 250-point hand'],samples},null,2));
+  await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/backend-performance-'+mode+'-report.json',JSON.stringify({scope:'Actual Miniflare Worker and local Firestore emulator; external identity/presence endpoints are isolated mocks, not physical-phone or production WAN timings',checks:['Room B completes while room A authentication is held','Room B completes while room A database is held','Room B completes while room A presence is held','Concurrent one-use exchange admits exactly one consumer','Real bot alarms, disconnect/reconnect and human timeout finish a 250-point hand'],samples},null,2));
  }finally{await miniflare.dispose();for(const path of created)await db.request('/'+path,'DELETE');}
 });
