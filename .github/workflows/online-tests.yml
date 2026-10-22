@@ -19,7 +19,15 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - run: npm ci && npm ci --prefix functions/online && npm ci --prefix backend/free
+      - name: Install web test dependencies
+        timeout-minutes: 6
+        run: npm ci --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
+      - name: Install emulator backend dependencies
+        timeout-minutes: 6
+        run: npm ci --prefix functions/online --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
+      - name: Install free Worker dependencies
+        timeout-minutes: 6
+        run: npm ci --prefix backend/free --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
       - run: npm run build && npm test && npm run check
       - name: Free backend bundle, unit tests and deployment preflight
         run: npm run verify --prefix backend/free
