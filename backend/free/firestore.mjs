@@ -18,9 +18,13 @@ export function decode(v){
  throw Error('Unsupported Firestore field');
 }
 export class Firestore {
- constructor(project,token,fetcher=(...args)=>fetch(...args),{origin='https://firestore.googleapis.com'}={}){this.project=project;this.token=token;this.fetcher=fetcher;this.origin=origin;this.root=`projects/${project}/databases/(default)/documents`;}
+ constructor(project,token,fetcher=(...args)=>fetch(...args),{origin='https://firestore.googleapis.com',timings=null}={}){this.project=project;this.token=token;this.fetcher=fetcher;this.origin=origin;this.timings=timings;this.root=`projects/${project}/databases/(default)/documents`;}
  name(path){if(!path.split('/').every(s=>/^[a-zA-Z0-9_-]{1,240}$/.test(s)))throw Error('Invalid document path');return this.root+'/'+path;}
  async request(suffix,method='GET',body){
+  const phase=suffix.endsWith(':commit')?'commit':suffix.endsWith(':beginTransaction')?'begin':suffix.endsWith(':rollback')?'rollback':'read';
+  return this.timings?this.timings.measure(phase,()=>this.rawRequest(suffix,method,body)):this.rawRequest(suffix,method,body);
+ }
+ async rawRequest(suffix,method='GET',body){
   const res=await this.fetcher(this.origin+'/v1/'+this.root+suffix,{method,headers:{Authorization:'Bearer '+await this.token(),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
   const data=await res.json();if(!res.ok){const e=Error('Database operation failed');e.status=res.status;e.code=data.error?.status;throw e;}return data;
  }

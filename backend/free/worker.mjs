@@ -1,6 +1,7 @@
 import {DurableObject} from 'cloudflare:workers';
 import {Firestore} from './firestore.mjs';
 import {Identity} from './identity.mjs';
+import {Timings,KeyedQueue,Slots} from './coordination.mjs';
 import {GameStore} from './store.mjs';
 import serviceModule from '../../functions/online/service.js';
 import R from '../../functions/online/shared/engine.js';
@@ -10,7 +11,7 @@ const id=()=>crypto.randomUUID().replaceAll('-',''),code=()=>Array.from({length:
 export default {async fetch(request,env){
  const origin=request.headers.get('Origin'),headers={'Cache-Control':'no-store','Vary':'Origin'};
  if(origin&&!origins.has(origin))return Response.json({error:'Origin not allowed'},{status:403,headers});
- if(origin)Object.assign(headers,{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Allow-Methods':'POST, OPTIONS'});
+ if(origin)Object.assign(headers,{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Expose-Headers':'Server-Timing, X-Request-ID'});
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers});
  if(request.method!=='POST'||!['/kaliApi','/kaliConsumeExchange'].includes(new URL(request.url).pathname))return Response.json({error:'POST required'},{status:405,headers});
  if(Number(request.headers.get('Content-Length')||0)>16384)return new Response(null,{status:413,headers});
@@ -18,8 +19,8 @@ export default {async fetch(request,env){
  const output=new Response(response.body,response);for(const [k,v]of Object.entries(headers))output.headers.set(k,v);return output;
 }};
 export class KaliCoordinator extends DurableObject {
- constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.queue=Promise.resolve();
-  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});this.lastPresenceScan=0;this.alarmRetryAfter=0;
+ constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.locks=new KeyedQueue();this.slots=new Slots(4);
+  this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});this.alarmRetryAfter=0;
   ctx.blockConcurrencyWhile(async()=>{
    const rooms=await this.storage.list({prefix:'room:'});
    this.alarmRetryAfter=await this.storage.get('alarmRetryAfter')||0;
@@ -27,7 +28,12 @@ export class KaliCoordinator extends DurableObject {
    if(rooms.size||(await this.storage.list({prefix:'delete:'})).size)await this.storage.setAlarm(Math.max(Date.now()+100,this.alarmRetryAfter));
   });
  }
- serial(fn){const result=this.queue.then(fn);this.queue=result.catch(()=>{});return result;}
+ context(timings){
+  const db=new Firestore(this.env.FIREBASE_PROJECT_ID,()=>this.identity.token(),undefined,{timings});
+  const store=new GameStore(db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));
+  const create=store.create.bind(store);store.create=(room,...args)=>this.locks.run('room:'+room.id,()=>create(room,...args),timings);
+  return {db,service:new serviceModule.GameService(store,{random,id,code}),store};
+ }
  async track(roomId,room){
   const key='room:'+roomId,prior=await this.storage.get(key);
   if(room)for(const p of Object.values(room.members)){
@@ -40,83 +46,108 @@ export class KaliCoordinator extends DurableObject {
   await this.arm();
  }
  async trackDeletion(id,active){if(active){await this.storage.put('delete:'+id,{id});await this.cleanupAlarm(Date.now()+1000);}else await this.storage.delete('delete:'+id);}
- async arm(){
-  const rooms=await this.storage.list({prefix:'room:'});let at=(await this.storage.list({prefix:'delete:'})).size?Date.now()+1000:Infinity;
+ async arm(){return this.locks.run(':schedule',async()=>{
+  const rooms=await this.storage.list({prefix:'room:'}),retries=await this.storage.list({prefix:'retry:'}),scans=await this.storage.list({prefix:'scan:'});let at=Infinity;
+  const deletions=await this.storage.list({prefix:'delete:'});
   for(const r of rooms.values()){
-   at=Math.min(at,Date.now()+(R.active(r)&&!r.paused?5000:30000));
-   if(!r.paused&&R.active(r)&&r.hand.deadline!==null)at=Math.min(at,r.hand.deadline);
+   const interval=R.active(r)&&!r.paused?5000:30000;
+   let due=(scans.get('scan:'+r.id)||0)+interval;
+   if(!r.paused&&R.active(r)&&r.hand.deadline!==null)due=Math.min(due,r.hand.deadline);
+   if(deletions.has('delete:'+r.id))due=Math.min(due,Date.now()+1000);
+   at=Math.min(at,Math.max(due,retries.get('retry:'+r.id)?.until||0));
   }
-  if(Number.isFinite(at)){at=Math.max(Date.now()+100,at,this.alarmRetryAfter);const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
- }
- async cleanupAlarm(at){at=Math.max(at,this.alarmRetryAfter);const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
- async rate(key){const now=Date.now(),k='limit:'+key,old=await this.storage.get(k),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90)throw Error('Too many requests; try again shortly');await this.storage.put(k,{at:same?old.at:now,count});await this.cleanupAlarm(now+60000);}
- async fetch(request){return this.serial(async()=>{
+  for(const {id}of deletions.values())at=Math.min(at,Math.max(Date.now()+1000,retries.get('retry:'+id)?.until||0));
+  if(Number.isFinite(at))await this.setEarlierAlarm(Math.max(Date.now()+100,at,this.alarmRetryAfter));
+ });}
+ async setEarlierAlarm(at){const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
+ async cleanupAlarm(at){return this.locks.run(':schedule',()=>this.setEarlierAlarm(Math.max(at,this.alarmRetryAfter)));}
+ async rate(key){const now=Date.now(),k='limit:'+key;await this.storage.transaction(async tx=>{const old=await tx.get(k),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90)throw Error('Too many requests; try again shortly');await tx.put(k,{at:same?old.at:now,count});});await this.cleanupAlarm(now+60000);}
+ async fetch(request){const timings=new Timings(),requestId=crypto.randomUUID();
   try{
    const text=await request.text();if(text.length>16384)throw Error('Request too large');const body=JSON.parse(text);
    let result;
    if(new URL(request.url).pathname==='/kaliConsumeExchange'){
     if(typeof body.exchange!=='string'||!/^[a-f0-9]{64}$/.test(body.exchange))throw Error('Invalid exchange');
-    const key='exchange:'+body.exchange,value=await this.storage.get(key);if(!value||value.expiresAt<Date.now())throw Error('Exchange expired');
-    await this.storage.delete(key);result={token:await this.identity.customToken(value.uid)};
+    const value=await this.storage.transaction(async tx=>{const key='exchange:'+body.exchange,v=await tx.get(key);if(!v||v.expiresAt<Date.now())throw Error('Exchange expired');await tx.delete(key);return v;});result={token:await this.identity.customToken(value.uid)};
    }else{
     const token=/^Bearer (.+)$/.exec(request.headers.get('Authorization')||'');if(!token)throw Error('Sign in required');
-    const who=await this.identity.verify(token[1]);await this.rate(who.uid);
+    const who=await timings.measure('auth',()=>this.identity.verify(token[1]));await this.rate(who.uid);
+    const {db,service,store}=this.context(timings);
     // Room actions use canonical room ownership, not the global tracker role.
     // Keep token revocation checks on every request; only avoid irrelevant reads.
-    if(['create','sessionHistory','register'].includes(body.operation))who.admin=who.admin||!!await this.db.get('admins/'+who.uid);
-    if(body.operation==='create')result=await this.service.create(who,body);
-    else if(body.operation==='sessionHistory')result=await this.service.history(who,body);
+    if(['create','sessionHistory','register'].includes(body.operation))who.admin=who.admin||!!await db.get('admins/'+who.uid);
+    let roomId=body.roomId||body.sessionId;
+    if(!body.operation&&body.action?.type==='join'&&!roomId){roomId=await store.lookup(String(body.code||'').trim().toUpperCase());body.roomId=roomId;}
+    if(roomId&&!/^[a-zA-Z0-9_-]{1,100}$/.test(roomId))throw Error('Invalid room');
+    const execute=async()=>{
+    if(body.operation==='create')result=await service.create(who,body);
+    else if(body.operation==='sessionHistory')result=await service.history(who,body);
     else if(body.operation==='clock')result={serverNow:Date.now()};
     else if(body.operation==='presenceSync'){
      if(!/^[a-zA-Z0-9_-]{1,100}$/.test(body.roomId||''))throw Error('Invalid room');
-     if(!await this.db.get('onlineRooms/'+body.roomId+'/members/'+who.uid))throw Error('Room admission required');
-     const connections=await this.realtime('/onlinePresence/'+body.roomId+'/'+who.uid+'/connections');
+     if(!await db.get('onlineRooms/'+body.roomId+'/members/'+who.uid))throw Error('Room admission required');
+     const connections=await timings.measure('presence',()=>this.realtime('/onlinePresence/'+body.roomId+'/'+who.uid+'/connections'));
      const connected=Object.keys(connections||{}).length>0;
-     await this.service.presence(body.roomId,who.uid,connected);result={connected};
+     await service.presence(body.roomId,who.uid,connected);result={connected};
     }
     else if(body.operation==='presenceAccess'){
      if(!/^[a-zA-Z0-9_-]{1,100}$/.test(body.roomId||''))throw Error('Invalid room');
-     if(!await this.db.get('onlineRooms/'+body.roomId+'/members/'+who.uid))throw Error('Room admission required');
-     await this.realtime('/onlineAcl/'+body.roomId+'/'+who.uid,'PUT',true);await this.track(body.roomId);result={ok:true};
+     if(!await db.get('onlineRooms/'+body.roomId+'/members/'+who.uid))throw Error('Room admission required');
+     await timings.measure('presence',()=>this.realtime('/onlineAcl/'+body.roomId+'/'+who.uid,'PUT',true));await this.track(body.roomId);result={ok:true};
     }else if(body.operation==='register'){
      if(!who.admin)throw Error('Admin access required');const name=String(body.name||'').trim();if(!name||name.length>60)throw Error('Invalid name');const playerId=id();
-     await this.db.request(':commit','POST',{writes:[this.db.set('players/'+playerId,{name,active:true,createdAt:new Date()},true)]});result={playerId};
+     await db.request(':commit','POST',{writes:[db.set('players/'+playerId,{name,active:true,createdAt:new Date()},true)]});result={playerId};
     }else if(body.operation==='exchange'){
      const bytes=new Uint8Array(32);crypto.getRandomValues(bytes);const exchange=Array.from(bytes,b=>b.toString(16).padStart(2,'0')).join('');
      await this.storage.put('exchange:'+exchange,{uid:who.uid,expiresAt:Date.now()+30000});await this.cleanupAlarm(Date.now()+31000);result={exchange};
-    }else result=await this.service.execute(who,body);
-   }return Response.json({...result,serverNow:Date.now()});
-  }catch(e){return Response.json({error:publicError(e)},{status:400});}
- });}
+    }else result=await service.execute(who,body);
+
+    };
+    if(roomId)await this.locks.run('room:'+roomId,execute,timings);else await execute();
+   }return Response.json({...result,serverNow:Date.now()},{headers:timings.headers(requestId)});
+  }catch(e){return Response.json({error:publicError(e)},{status:400,headers:timings.headers(requestId)});}
+ }
  async realtime(path,method='GET',value){
   const url=`https://${this.env.FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com${path}.json`,res=await fetch(url,{method,headers:{Authorization:'Bearer '+await this.identity.token(),'Content-Type':'application/json'},...(method==='GET'?{}:{body:JSON.stringify(value)}),signal:AbortSignal.timeout(10000)});
   if(!res.ok)throw Error('Presence sync unavailable');return res.json();
  }
- async alarm(){return this.serial(async()=>{let failed=false;
-  try{
-   for(const {id}of(await this.storage.list({prefix:'delete:'})).values())await this.store.deletion.step(id);
-   const rooms=await this.storage.list({prefix:'room:'});
-   // One server read serves every tracked room. No private card state enters RTDB.
-   const scanPresence=rooms.size&&Date.now()-this.lastPresenceScan>=5000;
-   const presence=scanPresence?await this.realtime('/onlinePresence'):null;
-   if(scanPresence)this.lastPresenceScan=Date.now();
-   for(const [key,cached]of rooms){
-    let room=cached.recover?await this.db.get('onlineState/'+cached.id):cached;
-    if(!room||room.status==='stopped'){await this.storage.delete(key);continue;}
-    if(cached.recover)await this.storage.put(key,room);
-    for(const p of Object.values(room.members))if(scanPresence&&p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
-     const connected=Object.keys(presence?.[room.id]?.[p.uid]?.connections||{}).length>0;
-     if(p.connected!==connected||connected&&p.status==='Disconnected')await this.service.presence(room.id,p.uid,connected);
-     // Revoke access for former participants when room state changes, below.
+ async alarm(){
+  if(this.alarmFlight)return this.alarmFlight;
+  this.alarmFlight=this.runAlarm();try{return await this.alarmFlight;}finally{this.alarmFlight=null;}
+ }
+ async runAlarm(){
+  const rooms=await this.storage.list({prefix:'room:'}),deletions=await this.storage.list({prefix:'delete:'}),ids=new Set([...rooms.values(),...deletions.values()].map(r=>r.id));
+  await Promise.all([...ids].map(id=>this.locks.run('room:'+id,()=>this.slots.run(async()=>{
+   const retry=await this.storage.get('retry:'+id);if(retry?.until>Date.now())return;
+   try{
+    if(deletions.has('delete:'+id))await this.store.deletion.step(id);
+    const key='room:'+id,cached=await this.storage.get(key);if(cached){
+     let room=cached.recover?await this.db.get('onlineState/'+id):cached;
+     if(!room||room.status==='stopped'){await this.storage.delete(key);await this.storage.delete('scan:'+id);}
+     else{
+      if(cached.recover)await this.storage.put(key,room);
+      const last=await this.storage.get('scan:'+id)||0,interval=R.active(room)&&!room.paused?5000:30000;
+      if(Date.now()-last>=interval){
+       const presence=await this.realtime('/onlinePresence/'+id);
+       // Fetch and application share this room's queue, so a newer explicit sync
+       // cannot be overwritten by a stale scan. A failed read never means offline.
+       for(const p of Object.values(room.members))if(p.kind==='human'&&!p.reservation&&p.status!=='Removed'){
+        const connected=Object.keys(presence?.[p.uid]?.connections||{}).length>0;
+        if(p.connected!==connected||connected&&p.status==='Disconnected')await this.service.presence(id,p.uid,connected);
+       }
+       await this.storage.put('scan:'+id,Date.now());
+      }
+      room=await this.storage.get(key)||room;
+      if(R.active(room)&&!room.paused&&room.hand.deadline!==null&&Date.now()>=room.hand.deadline)await this.service.due(id,room.hand.id,room.hand.turnGeneration);
+     }
     }
-    room=await this.storage.get(key)||room;
-    if(R.active(room)&&!room.paused&&room.hand.deadline!==null&&Date.now()>=room.hand.deadline)await this.service.due(room.id,room.hand.id,room.hand.turnGeneration);
-   }
-   // Bound ephemeral authentication/rate records; session/score history is never expired.
-   for(const prefix of ['exchange:','limit:'])for(const [key,v]of await this.storage.list({prefix}))if((v.expiresAt||v.at+60000)<Date.now())await this.storage.delete(key);
-   if(this.alarmRetryAfter){this.alarmRetryAfter=0;await this.storage.delete('alarmRetryAfter');}
-  }catch(e){failed=true;console.error('Kali alarm failed; retrying without inventing a move',e?.code||e?.name||'Error');this.alarmRetryAfter=Date.now()+5000;await this.storage.put('alarmRetryAfter',this.alarmRetryAfter);await this.storage.setAlarm(this.alarmRetryAfter);throw Error('Retry game alarm');}
-  finally{if(!failed)await this.arm();}
- });}
+    await this.storage.delete('retry:'+id);
+   }catch(e){console.error('Room alarm failed; bounded retry',e?.code||e?.name||'Error');await this.storage.put('retry:'+id,{until:Date.now()+5000});}
+  }))));
+  // Cleanup only ephemeral records under transactions: never erase a concurrent refresh.
+  for(const prefix of ['exchange:','limit:'])for(const [key]of await this.storage.list({prefix}))await this.storage.transaction(async tx=>{const v=await tx.get(key);if(v&&(v.expiresAt||v.at+60000)<Date.now())await tx.delete(key);});
+  if(this.alarmRetryAfter){this.alarmRetryAfter=0;await this.storage.delete('alarmRetryAfter');}
+  await this.arm();
+ }
 }
 function publicError(e){if(e?.status||e?.name==='JWTExpired'||e?.code?.startsWith('ERR_'))return 'Server connection or sign-in unavailable; reconnect and retry';return String(e?.message||'Action failed').slice(0,180);}

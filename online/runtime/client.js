@@ -13,6 +13,84 @@ const host = emulator ? "http://" + (window.KALI_HOST || location.hostname) + ":
 let subscribedRoomId = null, loadingRoom = false, connectionReady = false, presenceRecovery = null, reconnectBusy = false;
 let user = null, admin = false, room = null, own = { cards: [] }, profiles = [], memberships = [], unsubs = [], connection = null, clockAnchor = { server: Date.now(), mono: performance.now() }, busy = false, selected = null, previous = null, scoreOpen = false, historyOpen = false, historyMore = true, records = [], error = "", screen = "home";
 let pendingSince = 0;
+const speedRows = [], speedSnapshots = /* @__PURE__ */ new Map(), speedPending = /* @__PURE__ */ new Set();
+let uncertainCommand = null;
+const localActions = /* @__PURE__ */ new Set(["scores", "history", "close-panel", "diagnostics", "sound", "motion", "manage"]);
+const mutationBlocked = () => busy || !!uncertainCommand;
+function speedSample(operation) {
+  const row = { operation: ["bid", "play", "trump", "partners", "ready", "pause", "resume", "join", "create", "clock", "presenceSync", "presenceAccess", "exchange"].includes(operation) ? operation : "other", mode: (room == null ? void 0 : room.mode) || null, status: 0, stages: {}, started: performance.now() };
+  speedRows.push(row);
+  if (speedRows.length > 200) {
+    const old = speedRows.shift();
+    speedPending.delete(old);
+  }
+  return row;
+}
+function speedReport() {
+  const metrics = {};
+  for (const key of ["request", "clientToken", "queue", "auth", "read", "begin", "commit", "presence", "total", "snapshot", "frame", "visible"]) {
+    const values = speedRows.map((r) => r.stages[key]).filter(Number.isFinite).sort((a, b) => a - b);
+    if (values.length) metrics[key] = { samples: values.length, medianMs: Math.round(values[Math.floor((values.length - 1) * 0.5)]), p95Ms: Math.round(values[Math.ceil(values.length * 0.95) - 1]) };
+  }
+  return { version: 1, scope: "Local session only; timings in milliseconds. Frame means a next-frame opportunity, not physical-display FPS.", metrics, samples: speedRows.map(({ operation, mode, status: status2, stages, error: error2, background }) => ({ operation, mode, status: status2, stages: { ...stages }, ...error2 ? { error: error2 } : {}, ...background ? { background: true } : {} })) };
+}
+function speedSnapshot(id, revision) {
+  if (!Number.isFinite(revision)) return;
+  speedSnapshots.set(id + ":" + revision, performance.now());
+  if (speedSnapshots.size > 64) speedSnapshots.delete(speedSnapshots.keys().next().value);
+}
+function speedWatch(row, id, revision) {
+  if (!row || !Number.isFinite(revision)) return;
+  row.room = id;
+  row.revision = revision;
+  speedPending.add(row);
+  speedFrame();
+}
+function speedFrame() {
+  var _a;
+  if (document.hidden) {
+    for (const row of speedPending) row.background = true;
+    speedPending.clear();
+    return;
+  }
+  for (const row of speedPending) {
+    if (!room || room.id !== row.room) {
+      speedPending.delete(row);
+      continue;
+    }
+    if (Number(root.dataset.revision) < row.revision || room.revision < row.revision) continue;
+    const seated = (_a = room.hand) == null ? void 0 : _a.seatMap.some((p) => p.uid === uid());
+    if (R.active(room) && seated && (own.handId !== room.hand.id || own.cards.length !== room.hand.counts[uid()])) continue;
+    if (row.frameQueued) continue;
+    const at = speedSnapshots.get(row.room + ":" + row.revision);
+    if (at === void 0) continue;
+    row.stages.snapshot = Math.max(0, at - row.started);
+    row.frameQueued = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (!document.hidden && (room == null ? void 0 : room.id) === row.room && Number(root.dataset.revision) >= row.revision) {
+        row.stages.frame = Math.max(0, performance.now() - at);
+        row.stages.visible = performance.now() - row.started;
+      } else row.background = true;
+      speedPending.delete(row);
+    }));
+  }
+}
+async function showSpeed() {
+  var _a;
+  const report = speedReport(), labels = { request: "Request round trip", clientToken: "Device token", queue: "Room queue", auth: "Server identity", read: "Database reads", begin: "Transaction start", commit: "Database commit", presence: "Presence lookup", total: "Server total", snapshot: "Move to snapshot", frame: "Snapshot to next frame", visible: "Move to next frame" };
+  const text = Object.entries(report.metrics).map(([k, v]) => `${labels[k]}: median ${v.medianMs} ms \xB7 p95 ${v.p95Ms} ms (${v.samples})`).join("\n");
+  const choice = await gameDialog({ title: "Connection & performance", message: (text || "No timing samples yet. Play a few turns, then check again.") + "\n\nLast 200 requests, on this device only. No names, cards or login tokens. Snapshot timings are available for moves; server stages require the updated free backend.", choices: [{ value: "copy", label: "Copy report" }, { value: "cancel", label: "Close" }] });
+  if (choice === "copy") {
+    const value = JSON.stringify(speedReport(), null, 2);
+    try {
+      if (!((_a = navigator.clipboard) == null ? void 0 : _a.writeText)) throw Error();
+      await navigator.clipboard.writeText(value);
+      notice("Performance report copied");
+    } catch {
+      await gameDialog({ title: "Copy performance report", message: "Select and copy this local timing report.", input: { label: "Report JSON", value, readOnly: true, maxLength: 2e5 }, choices: [{ value: "cancel", label: "Close" }] });
+    }
+  }
+}
 let renderFrame = null, motionQueue = [], collectionUntil = 0, collectionTimer = null, pendingCollection = null;
 let reduced = localStorage.getItem("kaliReducedMotion") === "true" || matchMedia("(prefers-reduced-motion: reduce)").matches;
 let soundEnabled = localStorage.getItem("kaliSound") === "true", audioContext = null, lastSoundTurn = "", lastWarning = "";
@@ -56,7 +134,7 @@ const uid = () => user == null ? void 0 : user.uid, name = (id) => {
   var _a;
   return ((_a = room == null ? void 0 : room.members[id]) == null ? void 0 : _a.name) || "Player";
 };
-const btn = (text, action, disabled = false, style = "") => `<button ${disabled || busy ? "disabled" : ""} data-action="${esc(action)}" class="${style}">${text}</button>`;
+const btn = (text, action, disabled = false, style = "") => `<button ${disabled || (busy || uncertainCommand) && !localActions.has(action) && action !== "retry-move" ? "disabled" : ""} data-action="${esc(action)}" class="${style}">${text}</button>`;
 const sign = (n) => (n > 0 ? "+" : "") + n, suit = (s) => R.SYMBOLS[s] || "\u2014";
 const cardHTML = (c, extra = "") => {
   const v = R.card(c);
@@ -118,50 +196,70 @@ function askConfirm(title, message, label = "Confirm") {
   return gameDialog({ title, message, choices: [{ value: "confirm", label, style: "danger" }, { value: "cancel", label: "Cancel" }] }).then((value) => value === "confirm");
 }
 async function api(body, endpoint = "kaliApi") {
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 25e3);
+  var _a;
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 25e3), row = speedSample(((_a = body.action) == null ? void 0 : _a.type) || body.operation || endpoint);
+  let received = false;
   try {
     const headers = { "Content-Type": "application/json" };
     if (user) {
-      const aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Connection timed out.")), { once: true }));
-      headers.Authorization = "Bearer " + await Promise.race([user.getIdToken(), aborted]);
+      const start = performance.now(), aborted = new Promise((_, reject) => controller.signal.addEventListener("abort", () => reject(new Error("Connection timed out.")), { once: true }));
+      try {
+        headers.Authorization = "Bearer " + await Promise.race([user.getIdToken(), aborted]);
+      } finally {
+        row.stages.clientToken = performance.now() - start;
+      }
     }
     const res = await fetch(host + endpoint, { method: "POST", headers, body: JSON.stringify(body), cache: "no-store", signal: controller.signal });
+    received = true;
+    row.status = res.status;
+    for (const match of (res.headers.get("Server-Timing") || "").matchAll(/([a-zA-Z]+);dur=([0-9.]+)/g)) if (["queue", "auth", "read", "begin", "commit", "presence", "total"].includes(match[1])) row.stages[match[1]] = Number(match[2]);
     let value;
     try {
       value = await res.json();
     } catch {
-      throw Error("Game server unavailable. Check deployment and connection.");
+      const e = Error("Game server unavailable. Check deployment and connection.");
+      e.retryable = true;
+      throw e;
     }
-    if (!res.ok) throw Error(value.error || "Action failed");
+    if (!res.ok) {
+      const e = Error(value.error || "Action failed");
+      e.retryable = res.status >= 500 || /^Server connection/.test(value.error || "");
+      throw e;
+    }
     if (value.serverNow) clockAnchor = { server: value.serverNow, mono: performance.now() };
+    if (body.roomId && body.action) speedWatch(row, body.roomId, value.revision);
     return value;
   } catch (e) {
-    if (controller.signal.aborted) throw Error("Connection timed out. Your table state is preserved; reconnect and retry.");
+    row.error = controller.signal.aborted ? "timeout" : received ? "rejected" : "network";
+    if (controller.signal.aborted) {
+      const error2 = Error("Connection timed out. Your table state is preserved; reconnect and retry.");
+      error2.retryable = true;
+      throw error2;
+    }
+    if (!received) e.retryable = true;
     throw e;
   } finally {
     clearTimeout(timeout);
+    row.stages.request = performance.now() - row.started;
   }
 }
 function disableControls() {
   renderedMarkup = null;
-  root.querySelectorAll("button").forEach((b) => b.disabled = true);
+  root.querySelectorAll("button").forEach((b) => {
+    if (!localActions.has(b.dataset.action)) b.disabled = true;
+  });
 }
-async function command(action) {
-  var _a, _b;
-  if (!room || busy) return;
-  if (!navigator.onLine) {
-    notice("Offline. Reconnect to continue.");
-    return;
-  }
+async function submitMove(body) {
   busy = true;
   pendingSince = performance.now();
   disableControls();
   render();
-  const body = { roomId: room.id, revision: room.revision, handId: (_a = room.hand) == null ? void 0 : _a.id, turnGeneration: (_b = room.hand) == null ? void 0 : _b.turnGeneration, commandId: crypto.randomUUID(), action };
   try {
     await api(body);
+    uncertainCommand = null;
     return true;
   } catch (e) {
+    uncertainCommand = e.retryable ? body : null;
     notice(e.message);
     return false;
   } finally {
@@ -170,11 +268,25 @@ async function command(action) {
     render();
   }
 }
+async function command(action) {
+  var _a, _b;
+  if (!room || busy) return;
+  if (uncertainCommand) {
+    notice("Retry the pending move first. Its original command ID prevents duplicate actions.");
+    return false;
+  }
+  if (!navigator.onLine) {
+    notice("Offline. Reconnect to continue.");
+    return false;
+  }
+  return submitMove({ roomId: room.id, revision: room.revision, handId: (_a = room.hand) == null ? void 0 : _a.id, turnGeneration: (_b = room.hand) == null ? void 0 : _b.turnGeneration, commandId: crypto.randomUUID(), action });
+}
 function seatConnected() {
   const me = room == null ? void 0 : room.members[uid()];
   return !!(navigator.onLine && connectionReady && (me == null ? void 0 : me.connected) === true && me.status !== "Disconnected");
 }
 function recoveryPanel() {
+  if (room && (uncertainCommand == null ? void 0 : uncertainCommand.roomId) === room.id) return `<section class="connection-recovery" role="status"><span>Move confirmation pending. Retry safely with the same command.</span>${btn(busy ? "Sending\u2026" : "Retry pending move", "retry-move", busy)}</section>`;
   return room && room.status !== "stopped" && !seatConnected() ? `<section class="connection-recovery" role="status"><span>${navigator.onLine ? "Restoring your seat\u2026" : "Offline \xB7 reconnect when internet returns"}</span>${btn(reconnectBusy ? "Retrying\u2026" : "\u21BB Reconnect", "reconnect", reconnectBusy)}</section>` : "";
 }
 function missingPlayers() {
@@ -247,11 +359,11 @@ function header() {
 }
 function home() {
   const activeRooms = memberships.filter((r) => !["stopped", "Removed"].includes(r.status));
-  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p></section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${localStorage.getItem("kaliPlayerId") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><p class="muted">Choose your existing name, then take an empty seat. No admin approval needed.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${busy ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house \xB7 Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${busy ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your active rooms</h2><p class="muted">Completed sessions are in 3 Patti PRO \u2192 History \u2192 Sessions.</p>${activeRooms.length ? activeRooms.map((r) => btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">No active rooms. Create or join a table.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;
+  return `<section class="hero"><span class="eyebrow">THE SAME GAME. NOW AT YOUR TABLE.</span><div class="hero-cards">${cardHTML("AS")}${cardHTML("3S")}${cardHTML("AH")}</div><h1>Kali Ki Tidi</h1><p>250 points. One Hukum. Your next great hand.</p>${btn("Check connection speed", "diagnostics", false, "quiet")}</section><section class="home-grid"><form id="join"><h2>Join your table</h2><label>Your name<select name="playerId" required><option value="">Select from existing Players</option>${profiles.map((p) => `<option value="${esc(p.id)}" ${localStorage.getItem("kaliPlayerId") === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select></label><p class="muted">Choose your existing name, then take an empty seat. No admin approval needed.</p><label>Room code<input name="code" required maxlength="8" pattern="[A-Za-z2-9]{8}" value="${esc(new URLSearchParams(location.hash.slice(1)).get("join") || "")}" autocapitalize="characters"></label><button class="gold" ${mutationBlocked() ? "disabled" : ""}>Join game \u2192</button></form>${admin ? `<form id="create"><h2>Create a table</h2><label>Session name<input name="sessionName" required maxlength="80" placeholder="e.g. Huzefa house \xB7 Friday"></label><label>Your player profile<select name="playerId" required>${profiles.map((p) => `<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select></label><label>Players<select name="mode"><option value="4">4 players \xB7 40 cards</option><option value="6">6 players \xB7 42 cards</option></select></label><details><summary>Deck configuration</summary><label>First six<select name="six1">${R.SUITS.map((s) => `<option ${s === "C" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Second six<select name="six2">${R.SUITS.map((s) => `<option ${s === "D" ? "selected" : ""} value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label><label>Additional three<select name="extraThree">${["H", "C", "D"].map((s) => `<option value="${s}">${suit(s)} ${R.NAMES[s]}</option>`).join("")}</select></label></details><button class="gold" ${mutationBlocked() ? "disabled" : ""}>Create room</button></form>` : location.hostname === "appassets.androidplatform.net" ? window.KALI_NATIVE_PENDING ? `<section class="panel"><h2>Restoring your 3 Patti PRO identity\u2026</h2><p>Your account and seats stay linked to this APK.</p></section>` : `<section class="panel"><h2>Create a room</h2><p class="muted">Sign in using the existing 3 Patti PRO Home account controls.</p><a class="native-login" href="../index.html?nativeLogin=1">Sign in on 3 Patti PRO Home \u2192</a></section>` : `<form id="login"><h2>Admin sign in</h2><p class="muted">Use your existing 3 Patti PRO account to create and manage tables.</p><label>Email<input name="email" type="email" required autocomplete="username"></label><label>Password<input name="password" type="password" required autocomplete="current-password"></label><button>Sign in</button></form>`}</section><section class="panel"><h2>Your active rooms</h2><p class="muted">Completed sessions are in 3 Patti PRO \u2192 History \u2192 Sessions.</p>${activeRooms.length ? activeRooms.map((r) => btn(`${esc(r.sessionName)} \xB7 ${esc(r.status)}`, "room:" + r.roomId, false, "room-link")).join("") : '<p class="muted">No active rooms. Create or join a table.</p>'}</section><details class="panel"><summary>How to play</summary><p>Clockwise play. Default bidder opens 155; raise by 5 or permanently PASS. Choose Hukum and call any card outside your hand. Follow suit when possible; trumping when void is optional. The called-card holder reveals only when that card is played.</p><p>A/K/Q/J/10 = 10 points, each 5 = 5, 3\u2660 = 30. All cards total 250. 3\u2660 can lose to trump. Four players: one secret partner. Six players: one direct and one secret partner, possibly the same person.</p><p>Win: bidder +2\xD7bid, distinct partners +bid, opponents 0. Loss: bidder \u2212bid, partners \u2212rounded half bid, opponents +bid. Human bid/card turns last 30 seconds. Timeout passes or plays a legal card. Session ends only when admin stops it.</p></details>`;
 }
 function liveRoom() {
   const owner = room.admin === uid(), panel = scoreOpen ? "scores" : historyOpen ? "history" : screen === "manage" ? "manage" : null;
-  return `<section class="room-head live"><h1 title="${esc(room.sessionName)}">${esc(room.sessionName || room.code)}</h1><div class="room-actions">${btn("\u2197", "share", false, "gold")}${pauseControl()}${owner ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${table()}<nav class="toolbar live-tools" aria-label="Table options">${btn("Scores", "scores")}${btn("History", "history")}${owner ? btn("Manage", "manage") : btn("Leave", "leave")}</nav>${panel ? `<section class="table-drawer" role="dialog" aria-modal="true" aria-label="${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}"><div class="drawer-top"><strong>${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}</strong>${btn("Close", "close-panel")}</div><div class="drawer-body">${panel === "scores" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + scoreboard() : panel === "history" ? history() : btn("Rename session", "rename-session") + management()}</div></section>` : ""}${pauseBanner()}`;
+  return `<section class="room-head live"><h1 title="${esc(room.sessionName)}">${esc(room.sessionName || room.code)}</h1><div class="room-actions">${btn("\u2197", "share", false, "gold")}${pauseControl()}${owner ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${table()}<nav class="toolbar live-tools" aria-label="Table options">${btn("Scores", "scores")}${btn("History", "history")}${owner ? btn("Manage", "manage") : btn("Leave", "leave")}</nav>${panel ? `<section class="table-drawer" role="dialog" aria-modal="true" aria-label="${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}"><div class="drawer-top"><strong>${panel === "scores" ? "Session scores" : panel === "history" ? "Hand history" : "Manage table"}</strong>${btn("Close", "close-panel")}</div><div class="drawer-body">${panel === "scores" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + btn("Check speed", "diagnostics") + scoreboard() : panel === "history" ? history() : btn("Rename session", "rename-session") + management()}</div></section>` : ""}${pauseBanner()}`;
 }
 function lobby() {
   if (R.active(room)) return liveRoom();
@@ -259,7 +371,7 @@ function lobby() {
   return `<section class="room-head ${hasHand ? "live" : ""}"><div><span class="eyebrow">${room.mode} PLAYERS \xB7 250 POINTS</span><h1>${esc(room.sessionName || "Table " + room.code)}</h1><p class="room-code">Room ${esc(room.code)}</p><p>Clockwise seats \xB7 ${room.status === "stopped" ? "Session complete" : "Session stays open until admin stops it"}</p></div><div class="room-actions">${btn("\u2197 Invite", "share", false, "gold")}${isOwner && room.status !== "stopped" ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${hasHand ? table() : `<div class="lobby-seats">${Array.from({ length: room.mode }, (_, i) => {
     const p = seated.find((p2) => p2.seat === i + 1);
     return `<article class="seat-card ${(p == null ? void 0 : p.uid) === uid() ? "self" : ""}"><span class="seat-number">SEAT ${i + 1}</span><div class="avatar">${(p == null ? void 0 : p.kind) === "bot" ? "\u265F" : esc(((p == null ? void 0 : p.name) || "?").slice(0, 1).toUpperCase())}</div><h3>${esc((p == null ? void 0 : p.name) || "Empty seat")}</h3><span class="badge">${p ? p.kind === "bot" ? "COMPUTER" : "HUMAN" : "OPEN"}</span><p>${p ? status(p) : "Ready for a player"}</p>${!p && room.status !== "stopped" ? `${(me == null ? void 0 : me.approved) ? btn("Take seat " + (i + 1), "claim-seat:" + (i + 1), busy, "gold") : ""}${isOwner ? btn("+ Computer", "bot:" + (i + 1)) : ""}` : ""}</article>`;
-  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : !hasHand ? `<section class="ready-bar"><p>${room.paused ? "Session paused \xB7 Admin must Resume before Ready." : R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", room.paused || !seatConnected() || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : `<p class="muted">${seated.length === room.mode ? "All seats are occupied. Wait for an empty seat." : "Choose an empty seat to join the table."}</p>${!(me == null ? void 0 : me.approved) && (me == null ? void 0 : me.requestedPlayerId) ? btn("Confirm my player profile", "confirm-profile", busy, "gold") : ""}`}</section>` : ""}<div class="toolbar">${room.status !== "stopped" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + pauseControl() : ""}${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") + btn("Rename session", "rename-session") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${pauseBanner()}`;
+  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : !hasHand ? `<section class="ready-bar"><p>${room.paused ? "Session paused \xB7 Admin must Resume before Ready." : R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", room.paused || !seatConnected() || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : `<p class="muted">${seated.length === room.mode ? "All seats are occupied. Wait for an empty seat." : "Choose an empty seat to join the table."}</p>${!(me == null ? void 0 : me.approved) && (me == null ? void 0 : me.requestedPlayerId) ? btn("Confirm my player profile", "confirm-profile", busy, "gold") : ""}`}</section>` : ""}<div class="toolbar">${room.status !== "stopped" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + pauseControl() : ""}${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") + btn("Rename session", "rename-session") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${btn("Check speed", "diagnostics")}${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${pauseBanner()}`;
 }
 function status(p) {
   return !p.connected && p.kind !== "bot" ? "\u25CB Disconnected" : p.ready ? "\u2713 Ready" : esc(p.status);
@@ -327,10 +439,10 @@ function phaseControls(h) {
   if (h.phase === "auction") {
     const timeout = '<p class="bid-timeout-note">30 seconds \xB7 No bid = automatic PASS</p>';
     if (h.bid >= 250) return `<section class="max-bid-state" aria-live="polite"><strong>Maximum bid reached</strong><span>250 \xB7 ${esc(name(h.bidder))}</span>${timeout}${btn("PASS", "pass")}</section>`;
-    return `<form id="bid" class="bid-controls" data-hand="${esc(h.id)}" data-generation="${h.turnGeneration}" data-base-bid="${h.bid}"><div class="bid-shortcuts">${timeout}<button type="button" data-action="bid-max">Max 250</button></div><div class="action-bar"><button type="button" data-action="bid-down" aria-label="Decrease Hukum bid by five">\u2212</button><label>Hukum bid<select name="bid" aria-label="Choose Hukum bid">${Array.from({ length: (250 - h.bid) / 5 }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button type="button" data-action="bid-up" aria-label="Increase Hukum bid by five">+</button><button class="gold" ${busy ? "disabled" : ""}>Bid ${h.bid + 5}</button>${btn("PASS", "pass")}</div></form>`;
+    return `<form id="bid" class="bid-controls" data-hand="${esc(h.id)}" data-generation="${h.turnGeneration}" data-base-bid="${h.bid}"><div class="bid-shortcuts">${timeout}<button type="button" data-action="bid-max">Max 250</button></div><div class="action-bar"><button type="button" data-action="bid-down" aria-label="Decrease Hukum bid by five">\u2212</button><label>Hukum bid<select name="bid" aria-label="Choose Hukum bid">${Array.from({ length: (250 - h.bid) / 5 }, (_, i) => h.bid + 5 + i * 5).map((n) => `<option>${n}</option>`).join("")}</select></label><button type="button" data-action="bid-up" aria-label="Increase Hukum bid by five">+</button><button class="gold" ${mutationBlocked() ? "disabled" : ""}>Bid ${h.bid + 5}</button>${btn("PASS", "pass")}</div></form>`;
   }
   if (h.phase === "trump") return `<section class="panel"><h2>Choose Hukum</h2><div class="suit-picker">${R.SUITS.map((s) => btn(suit(s) + " " + R.NAMES[s], "trump:" + s, false, ["H", "D"].includes(s) ? "red" : "")).join("")}</div></section>`;
-  if (h.phase === "partners") return `<form id="partners" class="panel"><h2>Choose your partner${room.mode === 6 ? "s" : ""}</h2>${room.mode === 6 ? `<label>Direct partner<select name="direct">${h.seatMap.filter((p) => p.uid !== uid()).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select></label>` : ""}<label>Call any card outside your hand<select name="called">${R.deck(room.mode, h.config).filter((c) => !own.cards.includes(c)).map((c) => `<option value="${c}">${c.slice(0, -1)}${suit(c.slice(-1))} \xB7 ${R.points(c)} points</option>`).join("")}</select></label><p class="muted">Holder stays secret until this card is played. It may be your direct partner.</p><button class="gold" ${busy ? "disabled" : ""}>Confirm partners</button></form>`;
+  if (h.phase === "partners") return `<form id="partners" class="panel"><h2>Choose your partner${room.mode === 6 ? "s" : ""}</h2>${room.mode === 6 ? `<label>Direct partner<select name="direct">${h.seatMap.filter((p) => p.uid !== uid()).map((p) => `<option value="${esc(p.uid)}">${esc(p.name)}</option>`).join("")}</select></label>` : ""}<label>Call any card outside your hand<select name="called">${R.deck(room.mode, h.config).filter((c) => !own.cards.includes(c)).map((c) => `<option value="${c}">${c.slice(0, -1)}${suit(c.slice(-1))} \xB7 ${R.points(c)} points</option>`).join("")}</select></label><p class="muted">Holder stays secret until this card is played. It may be your direct partner.</p><button class="gold" ${mutationBlocked() ? "disabled" : ""}>Confirm partners</button></form>`;
   return "";
 }
 function scoreboard() {
@@ -357,11 +469,11 @@ function updateBidControls() {
   if (!select) return;
   const value = Number(select.value), minimum = room.hand.bid + 5;
   if (form.querySelector(".gold").textContent !== "Bid " + value) form.querySelector(".gold").textContent = "Bid " + value;
-  form.querySelector(".gold").disabled = busy || !Number.isInteger(value) || value < minimum || value > 250 || value % 5 !== 0;
-  form.querySelector("[data-action=bid-down]").disabled = busy || value <= minimum;
-  form.querySelector("[data-action=bid-up]").disabled = busy || value >= 250;
-  form.querySelector("[data-action=bid-max]").disabled = busy || value === 250;
-  select.disabled = busy;
+  form.querySelector(".gold").disabled = mutationBlocked() || !Number.isInteger(value) || value < minimum || value > 250 || value % 5 !== 0;
+  form.querySelector("[data-action=bid-down]").disabled = mutationBlocked() || value <= minimum;
+  form.querySelector("[data-action=bid-up]").disabled = mutationBlocked() || value >= 250;
+  form.querySelector("[data-action=bid-max]").disabled = mutationBlocked() || value === 250;
+  select.disabled = mutationBlocked();
 }
 const renderSlots = /* @__PURE__ */ new Set(["room-head", "game-meta", "partner-status", "table-wrap", "felt", "table-mark", "centre-trick", "last-trick", "turn-bar", "hand-hint", "my-hand", "hand-fan", "phase-area", "live-tools", "table-drawer", "drawer-top", "drawer-body", "pause-banner", "connection-recovery", "drawer-scrim"]);
 function renderKey(node) {
@@ -500,6 +612,7 @@ function renderNow() {
     if (kind === "trump" || kind === "reveal") (_d = document.querySelector(kind === "trump" ? ".game-meta" : ".partner-status")) == null ? void 0 : _d.animate([{ opacity: 0.2, transform: "scale(.97)" }, { opacity: 1, transform: "scale(1)" }], { duration: 400 });
   }
   else motionQueue = [];
+  speedFrame();
 }
 function tick() {
   var _a, _b;
@@ -694,6 +807,7 @@ async function enter(id) {
   unsubs.push(db.doc("onlineRooms/" + id).onSnapshot((s) => {
     var _a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k, _l;
     if (subscribedRoomId !== id) return;
+    if (!s.metadata.hasPendingWrites && !s.metadata.isFromCache && s.exists) speedSnapshot(id, s.data().revision);
     if (!s.exists) {
       unavailableRoom(id);
       return;
@@ -770,7 +884,7 @@ root.addEventListener("pointercancel", () => {
 }, { passive: true });
 root.addEventListener("submit", async (e) => {
   e.preventDefault();
-  if (busy) return;
+  if (mutationBlocked()) return;
   const f = e.target, v = Object.fromEntries(new FormData(f));
   try {
     if (f.id === "join") {
@@ -835,7 +949,11 @@ root.addEventListener("click", async (e) => {
   if (!target || target.disabled) return;
   const [action, ...tail] = target.dataset.action.split(":"), arg = tail.join(":");
   try {
-    if (action === "reconnect") {
+    if (action === "diagnostics") {
+      await showSpeed();
+    } else if (action === "retry-move") {
+      if (uncertainCommand && !busy && (room == null ? void 0 : room.id) === uncertainCommand.roomId) await submitMove(uncertainCommand);
+    } else if (action === "reconnect") {
       await reconnectSeat();
     } else if (action === "resume") {
       if (!seatConnected()) await reconnectSeat();
@@ -1009,8 +1127,10 @@ window.kaliReconnect = () => {
   render();
 };
 document.addEventListener("visibilitychange", () => {
-  if (document.hidden) clearCollection();
-  else window.kaliReconnect();
+  if (document.hidden) {
+    clearCollection();
+    speedFrame();
+  } else window.kaliReconnect();
 });
 window.addEventListener("online", window.kaliReconnect);
 window.addEventListener("offline", () => {
