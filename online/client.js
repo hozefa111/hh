@@ -58,7 +58,7 @@ async function api(body,endpoint='kaliApi'){
  try{
  const headers={'Content-Type':'application/json'};if(user){const start=performance.now(),aborted=new Promise((_,reject)=>controller.signal.addEventListener('abort',()=>reject(new Error('Connection timed out.')),{once:true}));try{headers.Authorization='Bearer '+await Promise.race([user.getIdToken(),aborted]);}finally{row.stages.clientToken=performance.now()-start;}}
  const res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});received=true;row.status=res.status;
- for(const match of (res.headers.get('Server-Timing')||'').matchAll(/([a-zA-Z]+);dur=([0-9.]+)/g))if(['queue','auth','read','begin','commit','presence','total'].includes(match[1]))row.stages[match[1]]=Number(match[2]);
+ const timingPattern=/([a-zA-Z]+);dur=([0-9.]+)/g;let match;while((match=timingPattern.exec(res.headers.get('Server-Timing')||''))!==null)if(['queue','auth','read','begin','commit','presence','total'].includes(match[1]))row.stages[match[1]]=Number(match[2]);
  let value;try{value=await res.json();}catch{const e=Error('Game server unavailable. Check deployment and connection.');e.retryable=true;throw e;}
  if(!res.ok){const e=Error(value.error||'Action failed');e.retryable=res.status>=500||/^Server connection/.test(value.error||'');throw e;}
  if(value.serverNow)clockAnchor={server:value.serverNow,mono:performance.now()};if(body.roomId&&body.action)speedWatch(row,body.roomId,value.revision);return value;

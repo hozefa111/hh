@@ -216,7 +216,9 @@ async function api(body, endpoint = "kaliApi") {
     const res = await fetch(host + endpoint, { method: "POST", headers, body: JSON.stringify(body), cache: "no-store", signal: controller.signal });
     received = true;
     row.status = res.status;
-    for (const match of (res.headers.get("Server-Timing") || "").matchAll(/([a-zA-Z]+);dur=([0-9.]+)/g)) if (["queue", "auth", "read", "begin", "commit", "presence", "total"].includes(match[1])) row.stages[match[1]] = Number(match[2]);
+    const timingPattern = /([a-zA-Z]+);dur=([0-9.]+)/g;
+    let match;
+    while ((match = timingPattern.exec(res.headers.get("Server-Timing") || "")) !== null) if (["queue", "auth", "read", "begin", "commit", "presence", "total"].includes(match[1])) row.stages[match[1]] = Number(match[2]);
     let value;
     try {
       value = await res.json();
