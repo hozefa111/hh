@@ -19,7 +19,7 @@ export default {async fetch(request,env){
  const output=new Response(response.body,response);for(const [k,v]of Object.entries(headers))output.headers.set(k,v);return output;
 }};
 export class KaliCoordinator extends DurableObject {
- constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.locks=new KeyedQueue();this.slots=new Slots(4);
+ constructor(ctx,env){super(ctx,env);this.env=env;this.storage=ctx.storage;this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.locks=new KeyedQueue();this.slots=new Slots(4);this.runningRooms=new Set();this.taskContext=ctx;
   this.store=new GameStore(this.db,(...args)=>this.track(...args),(id,active)=>this.trackDeletion(id,active));this.service=new serviceModule.GameService(this.store,{random,id,code});this.alarmRetryAfter=0;
   ctx.blockConcurrencyWhile(async()=>{
    const rooms=await this.storage.list({prefix:'room:'});
@@ -54,6 +54,7 @@ export class KaliCoordinator extends DurableObject {
    let due=(scans.get('scan:'+r.id)||0)+interval;
    if(!r.paused&&R.active(r)&&r.hand.deadline!==null)due=Math.min(due,r.hand.deadline);
    if(deletions.has('delete:'+r.id))due=Math.min(due,Date.now()+1000);
+   if(this.runningRooms.has(r.id))due=Math.max(due,Date.now()+1000);
    at=Math.min(at,Math.max(due,retries.get('retry:'+r.id)?.until||0));
   }
   for(const {id}of deletions.values())at=Math.min(at,Math.max(Date.now()+1000,retries.get('retry:'+id)?.until||0));
@@ -117,7 +118,9 @@ export class KaliCoordinator extends DurableObject {
  }
  async runAlarm(){
   const rooms=await this.storage.list({prefix:'room:'}),deletions=await this.storage.list({prefix:'delete:'}),ids=new Set([...rooms.values(),...deletions.values()].map(r=>r.id));
-  await Promise.all([...ids].map(id=>this.locks.run('room:'+id,()=>this.slots.run(async()=>{
+  for(const id of ids){
+   if(this.runningRooms.has(id))continue;this.runningRooms.add(id);
+   const job=this.locks.run('room:'+id,()=>this.slots.run(async()=>{
    const retry=await this.storage.get('retry:'+id);if(retry?.until>Date.now())return;
    try{
     if(deletions.has('delete:'+id))await this.store.deletion.step(id);
@@ -143,7 +146,11 @@ export class KaliCoordinator extends DurableObject {
     }
     await this.storage.delete('retry:'+id);
    }catch(e){console.error('Room alarm failed; bounded retry',e?.code||e?.name||'Error');await this.storage.put('retry:'+id,{until:Date.now()+5000});}
-  }))));
+  })).finally(async()=>{this.runningRooms.delete(id);await this.arm();});
+   // Do not keep the shared alarm event waiting for a stalled room. A persisted
+   // watchdog remains armed; independent rooms can run their next timer event.
+   this.taskContext.waitUntil(job.catch(async e=>{console.error('Room task retry',e?.name||'Error');await this.storage.put('retry:'+id,{until:Date.now()+5000});await this.arm();}));
+  }
   // Cleanup only ephemeral records under transactions: never erase a concurrent refresh.
   for(const prefix of ['exchange:','limit:'])for(const [key]of await this.storage.list({prefix}))await this.storage.transaction(async tx=>{const v=await tx.get(key);if(v&&(v.expiresAt||v.at+60000)<Date.now())await tx.delete(key);});
   if(this.alarmRetryAfter){this.alarmRetryAfter=0;await this.storage.delete('alarmRetryAfter');}

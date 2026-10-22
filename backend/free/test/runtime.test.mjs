@@ -77,7 +77,13 @@ for(const mode of [4,6])test(mode+'-seat actual Worker enforces origins/auth, is
     const fast=await Promise.race([api(kind==='auth'?{operation:'clock',roomId}:kind==='database'?{operation:'sessionHistory',sessionId:second,roomId,action:'rename',name:'Other isolated room',commandId:crypto.randomUUID()}:{operation:'presenceSync',roomId:second}),new Promise((_,reject)=>setTimeout(()=>reject(Error('Unrelated room blocked by '+kind)),3000))]);assert(fast);
    }finally{held=null;release();await slow;}
   }
-  const other=await db.get('onlineState/'+second);await api({roomId:second,commandId:crypto.randomUUID(),revision:other.revision,action:{type:'stop'}});
+  const sendOther=async action=>{const r=await db.get('onlineState/'+second);return api({roomId:second,commandId:crypto.randomUUID(),revision:r.revision,handId:r.hand?.id,turnGeneration:r.hand?.turnGeneration,action});};
+  for(let seat=2;seat<=4;seat++)await sendOther({type:'bot',seat});await sendOther({type:'ready'});
+  held={kind:'presence',room:roomId,...wait()};const releaseTimerHold=held.release;
+  const stalled=miniflare.dispatchFetch('http://worker/kaliApi',{method:'POST',headers:{Authorization:'Bearer '+token},body:JSON.stringify({operation:'presenceSync',roomId})});
+  try{await held.seen;const by=Date.now()+6500;let progressed=false;while(Date.now()<by){const r=await db.get('onlineState/'+second);if(r.hand.auction.length>=3){progressed=true;break;}await new Promise(r=>setTimeout(r,100));}assert(progressed,'Two successive automatic turns must run while another room remains blocked');}
+  finally{held=null;releaseTimerHold();await stalled;}
+  await sendOther({type:'stop',void:true});
   const send=async action=>{const r=await db.get('onlineState/'+roomId);return api({roomId,commandId:crypto.randomUUID(),revision:r.revision,handId:r.hand?.id,turnGeneration:r.hand?.turnGeneration,action});};
   for(let seat=2;seat<=mode;seat++)await send({type:'bot',seat});await send({type:'ready'});
   assert(adminReads>=1);const gameAdminReads=adminReads;
@@ -111,6 +117,6 @@ for(const mode of [4,6])test(mode+'-seat actual Worker enforces origins/auth, is
   const until=Date.now()+20000;while(await db.get('sessions/'+roomId)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,300));
   assert.equal(await db.get('sessions/'+roomId),null);assert.equal(await db.get('rounds/online_'+room.hand.id),null);assert.equal(await db.get('meta/sessionDeletionLock'),null);
 
-  await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/backend-performance-'+mode+'-report.json',JSON.stringify({scope:'Actual Miniflare Worker and local Firestore emulator; external identity/presence endpoints are isolated mocks, not physical-phone or production WAN timings',checks:['Room B completes while room A authentication is held','Room B completes while room A database is held','Room B completes while room A presence is held','Concurrent one-use exchange admits exactly one consumer','Real bot alarms, disconnect/reconnect and human timeout finish a 250-point hand'],samples},null,2));
+  await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/backend-performance-'+mode+'-report.json',JSON.stringify({scope:'Actual Miniflare Worker and local Firestore emulator; external identity/presence endpoints are isolated mocks, not physical-phone or production WAN timings',checks:['Room B completes while room A authentication is held','Room B completes while room A database is held','Room B completes while room A presence is held','Two successive automatic turns progress while another room remains blocked','Concurrent one-use exchange admits exactly one consumer','Real bot alarms, disconnect/reconnect and human timeout finish a 250-point hand'],samples},null,2));
  }finally{await miniflare.dispose();for(const path of created)await db.request('/'+path,'DELETE');}
 });
