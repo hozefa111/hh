@@ -74,7 +74,7 @@ for(const mode of [4,6])test(mode+'-seat actual Worker enforces origins/auth, is
    const slowBody=kind==='auth'?{operation:'clock'}:{operation:kind==='database'?'presenceAccess':'presenceSync',roomId};
    const slow=miniflare.dispatchFetch('http://worker/kaliApi',{method:'POST',headers:{Authorization:'Bearer '+slowToken,'Content-Type':'application/json'},body:JSON.stringify(slowBody)});
    try{await Promise.race([held.seen,new Promise((_,reject)=>setTimeout(()=>reject(Error('Slow dependency not reached')),3000))]);
-    const fast=await Promise.race([api(kind==='auth'?{operation:'clock'}:{operation:'presenceSync',roomId:second}),new Promise((_,reject)=>setTimeout(()=>reject(Error('Unrelated room blocked by '+kind)),3000))]);assert(fast);
+    const fast=await Promise.race([api(kind==='auth'?{operation:'clock',roomId}:kind==='database'?{operation:'sessionHistory',sessionId:second,roomId,action:'rename',name:'Other isolated room',commandId:crypto.randomUUID()}:{operation:'presenceSync',roomId:second}),new Promise((_,reject)=>setTimeout(()=>reject(Error('Unrelated room blocked by '+kind)),3000))]);assert(fast);
    }finally{held=null;release();await slow;}
   }
   const other=await db.get('onlineState/'+second);await api({roomId:second,commandId:crypto.randomUUID(),revision:other.revision,action:{type:'stop'}});
