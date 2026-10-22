@@ -250,16 +250,17 @@ function disableControls() {
   });
 }
 async function submitMove(body) {
+  const owner = uid(), current = () => (room == null ? void 0 : room.id) === body.roomId && uid() === owner;
   busy = true;
   pendingSince = performance.now();
   disableControls();
   render();
   try {
     await api(body);
-    uncertainCommand = null;
+    if (current()) uncertainCommand = null;
     return true;
   } catch (e) {
-    uncertainCommand = e.retryable ? body : null;
+    if (current()) uncertainCommand = e.retryable ? body : null;
     notice(e.message);
     return false;
   } finally {
@@ -301,6 +302,7 @@ function pauseBanner() {
   return `<section class="pause-banner"><h2>\u2161 Game paused</h2><p>${missing.length ? "Waiting for " + missing.map((p) => esc(name(p.uid))).join(", ") + ". Their seats, cards and remaining time are preserved." : "Admin paused the table. Cards and remaining time are preserved."}</p><div class="pause-actions">${owner ? btn("Resume game", "resume", missing.length > 0) + (R.active(room) ? btn("Void hand & replace player", "void-replace", false, "danger") : "") : "<p>Reconnect to your existing seat. The admin resumes when everyone is connected.</p>"}</div>${owner && missing.length ? '<p class="muted">Wait for reconnection, or void this unfinished hand before choosing a replacement. Completed scores stay saved.</p>' : ""}</section>`;
 }
 function leaveRoomView() {
+  uncertainCommand = null;
   window.kaliDismissDialog();
   clearCollection();
   subscribedRoomId = null;
@@ -754,6 +756,7 @@ async function attachPresence(id) {
 }
 function unavailableRoom(id, message) {
   if (subscribedRoomId !== id) return;
+  uncertainCommand = null;
   clearCollection();
   subscribedRoomId = null;
   unsubs.forEach((f) => f());
@@ -1086,6 +1089,10 @@ async function loadProfiles() {
 let membershipUnsub = null;
 auth.onAuthStateChanged(async (current) => {
   if (user && user.uid !== (current == null ? void 0 : current.uid)) {
+    uncertainCommand = null;
+    speedRows.length = 0;
+    speedSnapshots.clear();
+    speedPending.clear();
     clearCollection();
     unsubs.forEach((f) => f());
     unsubs = [];
