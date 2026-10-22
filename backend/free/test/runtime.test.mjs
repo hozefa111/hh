@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {readFile,mkdir,writeFile} from 'node:fs/promises';
 import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
 import {generateKeyPair,exportJWK,exportPKCS8,SignJWT} from 'jose';
 import {Firestore} from '../firestore.mjs';
@@ -12,7 +12,7 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
  const {publicKey,privateKey}=await generateKeyPair('RS256',{extractable:true}),jwk=await exportJWK(publicKey);Object.assign(jwk,{kid:'test-key',alg:'RS256',use:'sig'});
  const private_key=await exportPKCS8(privateKey),db=new Firestore(project,async()=>'owner',fetch,{origin:'http://'+emulator});
  await db.request(':commit','POST',{writes:[db.set('players/'+profile,{name:'Worker human test'},true)]});created.add('players/'+profile);await db.request(':commit','POST',{writes:[db.set('admins/'+uid,{admin:true},true)]});created.add('admins/'+uid);
- let roomId;
+ let roomId;const samples=[];
  let held=null;const wait=()=>{let release,entered;const promise=new Promise(r=>release=r),seen=new Promise(r=>entered=r);return {promise,release,entered,seen};};
  const presence={},globalPresenceReads=[];let adminReads=0,identityChecks=0,presenceFailures=0;const failedScans=[];
  const miniflare=new Miniflare(convertV4MiniflareOptions({name:'kali-test',modules:true,script:await readFile(new URL('../dist/worker.mjs',import.meta.url),'utf8'),compatibilityDate:'2026-03-01',
@@ -45,7 +45,8 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   const missing=await miniflare.dispatchFetch('http://worker/kaliApi',{method:'POST',body:'{}'});assert.equal(missing.status,400);
   const token=await new SignJWT({user_id:uid,auth_time:Math.floor(Date.now()/1000)}).setProtectedHeader({alg:'RS256',kid:'test-key'}).setSubject(uid).setIssuer('https://securetoken.google.com/'+project).setAudience(project).setIssuedAt().setExpirationTime('1h').sign(privateKey);
   const api=async(body,endpoint='kaliApi')=>{
-   const res=await miniflare.dispatchFetch('http://worker/'+endpoint,{method:'POST',headers:{Origin:'https://appassets.androidplatform.net',Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body)}),value=await res.json();
+   const started=performance.now();const res=await miniflare.dispatchFetch('http://worker/'+endpoint,{method:'POST',headers:{Origin:'https://appassets.androidplatform.net',Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body)}),value=await res.json();
+   samples.push({operation:body.operation||body.action?.type||'exchange',requestMs:performance.now()-started,serverTiming:res.headers.get('Server-Timing'),heldDependency:held?.kind||null});
    assert.equal(res.headers.get('Access-Control-Allow-Origin'),'https://appassets.androidplatform.net');assert.equal(res.status,200,JSON.stringify(value));assert.match(res.headers.get('Server-Timing'),/auth;dur=/);assert.match(res.headers.get('X-Request-ID'),/^[a-f0-9-]{36}$/);assert.match(res.headers.get('Access-Control-Expose-Headers'),/Server-Timing/);return value;
   };
   const {exchange}=await api({operation:'exchange'});const consumeRequests=await Promise.all([1,2].map(()=>miniflare.dispatchFetch('http://worker/kaliConsumeExchange',{method:'POST',body:JSON.stringify({exchange})})));assert.deepEqual(consumeRequests.map(r=>r.status).sort(),[200,400]);
@@ -103,5 +104,6 @@ test('actual Worker runtime enforces origins/auth and completes a bot game throu
   const until=Date.now()+20000;while(await db.get('sessions/'+roomId)&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,300));
   assert.equal(await db.get('sessions/'+roomId),null);assert.equal(await db.get('rounds/online_'+room.hand.id),null);assert.equal(await db.get('meta/sessionDeletionLock'),null);
 
+  await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/backend-performance-report.json',JSON.stringify({scope:'Actual Miniflare Worker and local Firestore emulator; external identity/presence endpoints are isolated mocks, not physical-phone or production WAN timings',checks:['Room B completes while room A authentication is held','Room B completes while room A database is held','Room B completes while room A presence is held','Concurrent one-use exchange admits exactly one consumer','Real bot alarms, disconnect/reconnect and human timeout finish a 250-point hand'],samples},null,2));
  }finally{await miniflare.dispose();for(const path of created)await db.request('/'+path,'DELETE');}
 });

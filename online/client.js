@@ -66,7 +66,7 @@ async function api(body,endpoint='kaliApi'){
 }
 
 function disableControls(){renderedMarkup=null;root.querySelectorAll('button').forEach(b=>{if(!localActions.has(b.dataset.action))b.disabled=true;});}
-async function submitMove(body){busy=true;pendingSince=performance.now();disableControls();render();try{await api(body);uncertainCommand=null;return true;}catch(e){uncertainCommand=e.retryable?body:null;notice(e.message);return false;}finally{busy=false;pendingSince=0;render();}}
+async function submitMove(body){const owner=uid(),current=()=>room?.id===body.roomId&&uid()===owner;busy=true;pendingSince=performance.now();disableControls();render();try{await api(body);if(current())uncertainCommand=null;return true;}catch(e){if(current())uncertainCommand=e.retryable?body:null;notice(e.message);return false;}finally{busy=false;pendingSince=0;render();}}
 async function command(action){if(!room||busy)return;if(uncertainCommand){notice('Retry the pending move first. Its original command ID prevents duplicate actions.');return false;}if(!navigator.onLine){notice('Offline. Reconnect to continue.');return false;}return submitMove({roomId:room.id,revision:room.revision,handId:room.hand?.id,turnGeneration:room.hand?.turnGeneration,commandId:crypto.randomUUID(),action});}
 
 function seatConnected(){const me=room?.members[uid()];return !!(navigator.onLine&&connectionReady&&me?.connected===true&&me.status!=='Disconnected');}
@@ -74,7 +74,7 @@ function recoveryPanel(){if(room&&uncertainCommand?.roomId===room.id)return `<se
 function missingPlayers(){return R.active(room)?room.hand.seatMap.filter(p=>p.kind!=='bot'&&!room.members[p.uid].connected):[];}
 function pauseControl(){return room.admin===uid()&&room.status!=='stopped'?btn(room.paused?'Resume':'Pause',room.paused?'resume':'pause',room.paused&&missingPlayers().length>0):'';}
 function pauseBanner(){if(!room.paused)return '';const missing=missingPlayers(),owner=room.admin===uid();return `<section class="pause-banner"><h2>Ⅱ Game paused</h2><p>${missing.length?'Waiting for '+missing.map(p=>esc(name(p.uid))).join(', ')+'. Their seats, cards and remaining time are preserved.':'Admin paused the table. Cards and remaining time are preserved.'}</p><div class="pause-actions">${owner?btn('Resume game','resume',missing.length>0)+(R.active(room)?btn('Void hand & replace player','void-replace',false,'danger'):''):'<p>Reconnect to your existing seat. The admin resumes when everyone is connected.</p>'}</div>${owner&&missing.length?'<p class="muted">Wait for reconnection, or void this unfinished hand before choosing a replacement. Completed scores stay saved.</p>':''}</section>`;}
-function leaveRoomView(){window.kaliDismissDialog();clearCollection();subscribedRoomId=null;room=null;own={cards:[]};previous=null;selected=null;loadingRoom=false;error='';screen='home';unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}connectionReady=false;render();}
+function leaveRoomView(){uncertainCommand=null;window.kaliDismissDialog();clearCollection();subscribedRoomId=null;room=null;own={cards:[]};previous=null;selected=null;loadingRoom=false;error='';screen='home';unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}connectionReady=false;render();}
 
 async function reconnectSeat(){
  if(!room||!user||reconnectBusy)return;if(!navigator.onLine){notice('Offline. Turn on your internet, then tap Reconnect.');return;}
@@ -237,7 +237,7 @@ async function attachPresence(id){
 }
 
 function unavailableRoom(id,message){
- if(subscribedRoomId!==id)return;clearCollection();subscribedRoomId=null;unsubs.forEach(f=>f());unsubs=[];
+ if(subscribedRoomId!==id)return;uncertainCommand=null;clearCollection();subscribedRoomId=null;unsubs.forEach(f=>f());unsubs=[];
  if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}
  connectionReady=false;loadingRoom=false;room=null;own={cards:[]};previous=null;screen='home';
  if(localStorage.getItem('kaliRoom')===id)localStorage.removeItem('kaliRoom');
@@ -324,7 +324,7 @@ if(await askConfirm('Void unfinished hand?','No points from this unfinished hand
  }catch(err){if(err.name!=='AbortError')notice(err.message);}});
 async function loadProfiles(){profiles=(await db.collection('players').get()).docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.name).localeCompare(String(b.name)));render();}
 let membershipUnsub=null;
-auth.onAuthStateChanged(async current=>{if(user&&user.uid!==current?.uid){clearCollection();unsubs.forEach(f=>f());unsubs=[];room=null;own={cards:[]};memberships=[];subscribedRoomId=null;loadingRoom=false;if(connection){connection.remove().catch(()=>{});connection=null;}presence.goOffline();presence.goOnline();}user=current;admin=false;if(membershipUnsub)membershipUnsub();try{if(user){const token=await user.getIdTokenResult();const role=await db.doc('admins/'+user.uid).get();admin=token.claims.admin===true||role.exists;membershipUnsub=db.collection('onlineMemberships/'+user.uid+'/rooms').onSnapshot(s=>{memberships=s.docs.map(d=>d.data());if(!room)render();});}await loadProfiles();if(user)await api({operation:'clock'});}catch(e){error=e.message;}render();});
+auth.onAuthStateChanged(async current=>{if(user&&user.uid!==current?.uid){uncertainCommand=null;speedRows.length=0;speedSnapshots.clear();speedPending.clear();clearCollection();unsubs.forEach(f=>f());unsubs=[];room=null;own={cards:[]};memberships=[];subscribedRoomId=null;loadingRoom=false;if(connection){connection.remove().catch(()=>{});connection=null;}presence.goOffline();presence.goOnline();}user=current;admin=false;if(membershipUnsub)membershipUnsub();try{if(user){const token=await user.getIdTokenResult();const role=await db.doc('admins/'+user.uid).get();admin=token.claims.admin===true||role.exists;membershipUnsub=db.collection('onlineMemberships/'+user.uid+'/rooms').onSnapshot(s=>{memberships=s.docs.map(d=>d.data());if(!room)render();});}await loadProfiles();if(user)await api({operation:'clock'});}catch(e){error=e.message;}render();});
 window.kaliReconnect=()=>{presenceRecovery?.();render();};
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearCollection();speedFrame();}else window.kaliReconnect();});
 window.addEventListener('online',window.kaliReconnect);window.addEventListener('offline',()=>{connectionReady=false;render();});
