@@ -25,7 +25,7 @@ class RestMemory {
   this.calls.push({url,method:init.method});const body=init.body?JSON.parse(init.body):{},suffix=new URL(url).pathname.split('/documents')[1];
   if(suffix===':beginTransaction')return Response.json({transaction:'memory'});
   if(suffix===':rollback')return Response.json({});
-  if(suffix===':batchGet')return Response.json(body.documents.map(name=>{const fields=this.docs.get(name.split('/documents/')[1]);return fields?{found:{name,fields}}:{missing:name};}));
+  if(suffix===':batchGet')return Response.json([...(body.newTransaction?[{transaction:'memory'}]:[]),...body.documents.map(name=>{const fields=this.docs.get(name.split('/documents/')[1]);return fields?{found:{name,fields}}:{missing:name};})]);
   if(suffix.endsWith(':runQuery')){const q=body.structuredQuery,col=suffix.slice(1,-9),prefix=(col?col+'/':'')+q.from[0].collectionId+'/',after=q.startAt?.values[0].referenceValue.split('/documents/')[1];const docs=[...this.docs.entries()].filter(([k])=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')&&(!after||k>after)).sort(([a],[b])=>a<b?-1:a>b?1:0).slice(0,q.limit).map(([k,fields])=>({document:{name:'projects/demo/databases/(default)/documents/'+k,fields}}));return Response.json(docs);}
   if(suffix===':commit'){
    for(const w of body.writes)if(w.currentDocument?.exists===false&&this.docs.has(w.update.name.split('/documents/')[1]))return Response.json({error:{status:'ALREADY_EXISTS'}},{status:409});
@@ -138,5 +138,16 @@ test('batch transaction reads preserve request order, missing documents and casc
  const rows=await db.getMany(['players/a','players/b','players/c'],'transaction');assert.deepEqual(rows,[{name:'First'},null,{name:'Third'}]);assert.equal(rows[0]._cascadeVersion,'v1');assert.equal(rows[2]._cascadeVersion,'v3');
 });
 test('a keyed move reads canonical state and its receipt in one atomic batch',async()=>{
- const f=await fixture(4);const start=f.memory.calls.length;await f.send('admin',{type:'bot',seat:2});const reads=f.memory.calls.slice(start).filter(c=>c.url.endsWith(':batchGet'));assert.equal(reads.length,1);
+ const f=await fixture(4);const start=f.memory.calls.length;await f.send('admin',{type:'bot',seat:2});const calls=f.memory.calls.slice(start),reads=calls.filter(c=>c.url.endsWith(':batchGet'));assert.equal(reads.length,1);assert.equal(calls.filter(c=>c.url.endsWith(':beginTransaction')).length,0);assert.equal(calls.filter(c=>c.url.endsWith(':commit')).length,1);
+});
+
+test('hot transactions combine start/read, retry conflicts and never commit without a token',async()=>{
+ let commits=0,reads=0,rollbacks=0;
+ const db=new Firestore('demo',async()=>'test',async(url,init)=>{const b=JSON.parse(init.body);assert(!url.endsWith(':beginTransaction'));
+  if(url.endsWith(':batchGet')){reads++;assert.deepEqual(b.newTransaction,{readWrite:{}});return Response.json([{transaction:'tx'+reads},{found:{name:b.documents[0],fields:encode({score:10}).mapValue.fields}}]);}
+  if(url.endsWith(':rollback')){rollbacks++;return Response.json({});}
+  if(url.endsWith(':commit')){commits++;assert.equal(b.transaction,'tx'+reads);return commits===1?Response.json({error:{status:'ABORTED'}},{status:409}):Response.json({});}
+ });
+ const result=await db.transactionRead(['players/test'],async rows=>({writes:[],result:rows[0].score}));assert.equal(result,10);assert.equal(reads,2);assert.equal(commits,2);assert.equal(rollbacks,1);
+ let callback=false;const broken=new Firestore('demo',async()=>'test',async(url)=>{assert(url.endsWith(':batchGet'));return Response.json([]);});await assert.rejects(broken.transactionRead(['players/test'],async()=>{callback=true;return{writes:[],result:null};}),/transaction unavailable/);assert.equal(callback,false);
 });

@@ -36,6 +36,9 @@ export class Firestore {
  async getMany(paths,transaction){
   const documents=paths.map(path=>this.name(path));
   const rows=await this.request(':batchGet','POST',{documents,...(transaction?{transaction}:{})});
+  return this.decodeMany(documents,rows);
+ }
+ decodeMany(documents,rows){
   const found=new Map(rows.filter(r=>r.found).map(r=>[r.found.name,r.found]));
   return documents.map(name=>{const doc=found.get(name);if(!doc)return null;const data=decode({mapValue:{fields:doc.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:doc.updateTime||null});return data;});
  }
@@ -48,6 +51,20 @@ export class Firestore {
  }
  set(path,value,create=false){return {update:{name:this.name(path),fields:encode(value).mapValue.fields},...(create?{currentDocument:{exists:false}}:{})};}
  delete(path){return {delete:this.name(path)};}
+ // Start and read a transaction in one round trip. Used only for the hot move
+ // path; general history/deletion transactions keep the existing interface.
+ async transactionRead(paths,fn){
+  const documents=paths.map(path=>this.name(path));
+  for(let attempt=0;attempt<5;attempt++){
+   let transaction;
+   try{
+    const rows=await this.request(':batchGet','POST',{documents,newTransaction:{readWrite:{}}});
+    transaction=rows.find(r=>r.transaction)?.transaction;if(!transaction)throw Error('Database transaction unavailable');
+    const {writes,result}=await fn(this.decodeMany(documents,rows));
+    await this.request(':commit','POST',{transaction,writes});return result;
+   }catch(e){if(transaction)await this.request(':rollback','POST',{transaction}).catch(()=>{});if(e.code!=='ABORTED'||attempt===4)throw e;}
+  }
+ }
  async transaction(fn){
   for(let attempt=0;attempt<5;attempt++){
    const {transaction}=await this.request(':beginTransaction','POST',{options:{readWrite:{}}});
