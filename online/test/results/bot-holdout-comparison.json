@@ -1,0 +1,79 @@
+{
+  "seedCountPerMode": 256,
+  "startSeed": 129,
+  "hands": 2048,
+  "contractSetup": "Identical seeded deals, bidder, bid, trump and called/direct partners selected by frozen old policy for every matched set. Only card play varies.",
+  "illegalMoves": 0,
+  "results": [
+    {
+      "mode": 4,
+      "seeds": 256,
+      "variants": {
+        "baseline": {
+          "bidderTeamWinRate": 0.48046875,
+          "oppositionWinRate": 0.51953125,
+          "meanBidderTeamPoints": 161.34765625
+        },
+        "newBiddingTeam": {
+          "bidderTeamWinRate": 0.51171875,
+          "oppositionWinRate": 0.48828125,
+          "meanBidderTeamPoints": 164.53125
+        },
+        "newOpposition": {
+          "bidderTeamWinRate": 0.47265625,
+          "oppositionWinRate": 0.52734375,
+          "meanBidderTeamPoints": 162.48046875
+        },
+        "allNew": {
+          "bidderTeamWinRate": 0.49609375,
+          "oppositionWinRate": 0.50390625,
+          "meanBidderTeamPoints": 164.21875
+        }
+      }
+    },
+    {
+      "mode": 6,
+      "seeds": 256,
+      "variants": {
+        "baseline": {
+          "bidderTeamWinRate": 0.4921875,
+          "oppositionWinRate": 0.5078125,
+          "meanBidderTeamPoints": 160.87890625
+        },
+        "newBiddingTeam": {
+          "bidderTeamWinRate": 0.546875,
+          "oppositionWinRate": 0.453125,
+          "meanBidderTeamPoints": 164.58984375
+        },
+        "newOpposition": {
+          "bidderTeamWinRate": 0.45703125,
+          "oppositionWinRate": 0.54296875,
+          "meanBidderTeamPoints": 156.30859375
+        },
+        "allNew": {
+          "bidderTeamWinRate": 0.50390625,
+          "oppositionWinRate": 0.49609375,
+          "meanBidderTeamPoints": 160.1171875
+        }
+      }
+    }
+  ],
+  "decisions": {
+    "old": {
+      "count": 46138,
+      "medianMs": 0.01938700000027893,
+      "p95Ms": 0.06792400000006182,
+      "p99Ms": 0.23822200000000748,
+      "maxMs": 26.312890000000152
+    },
+    "new": {
+      "count": 41984,
+      "medianMs": 0.030754999999771826,
+      "p95Ms": 0.2147129999993922,
+      "p99Ms": 0.5688030000001163,
+      "maxMs": 22.138990999999805
+    }
+  },
+  "node": "v24.19.0",
+  "limitations": "Synthetic local Node CPU and fixed-contract self-play, not physical-phone/WAN timings or a statistically conclusive human skill rating."
+}

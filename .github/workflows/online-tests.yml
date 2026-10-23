@@ -29,6 +29,8 @@ jobs:
         timeout-minutes: 6
         run: npm ci --prefix backend/free --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
       - run: npm run build && npm test && npm run check
+      - name: Reproducible bot card-play comparison
+        run: KALI_BOT_SIM_SEEDS=64 npm run test:bot-comparison
       - name: Free backend bundle, unit tests and deployment preflight
         run: npm run verify --prefix backend/free
       - run: npx playwright install --with-deps chromium
