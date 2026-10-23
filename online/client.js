@@ -100,7 +100,7 @@ function lobbyReady(){
 }
 let observedDock=null;
 const dockObserver=typeof ResizeObserver==='function'?new ResizeObserver(()=>measureLobbyDock()):null;
-function measureLobbyDock(){if(!observedDock)return;const height=Math.ceil(observedDock.getBoundingClientRect().height)+'px';if(root.style.getPropertyValue('--lobby-dock-height')!==height)root.style.setProperty('--lobby-dock-height',height);}
+function measureLobbyDock(){if(!observedDock)return;const height=Math.ceil(observedDock.getBoundingClientRect().height)+'px';if(document.documentElement.style.getPropertyValue('--lobby-dock-height')!==height)document.documentElement.style.setProperty('--lobby-dock-height',height);}
 function observeLobbyDock(){const dock=root.querySelector('.lobby-ready');if(dock!==observedDock){if(observedDock)dockObserver?.unobserve(observedDock);observedDock=dock;if(dock){dockObserver?.observe(dock);measureLobbyDock();}}}
 window.addEventListener('resize',measureLobbyDock,{passive:true});
 function status(p){return !p.connected&&p.kind!=='bot'?'○ Disconnected':p.ready?'✓ Ready':esc(p.status);}

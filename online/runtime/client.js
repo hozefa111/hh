@@ -391,7 +391,7 @@ const dockObserver = typeof ResizeObserver === "function" ? new ResizeObserver((
 function measureLobbyDock() {
   if (!observedDock) return;
   const height = Math.ceil(observedDock.getBoundingClientRect().height) + "px";
-  if (root.style.getPropertyValue("--lobby-dock-height") !== height) root.style.setProperty("--lobby-dock-height", height);
+  if (document.documentElement.style.getPropertyValue("--lobby-dock-height") !== height) document.documentElement.style.setProperty("--lobby-dock-height", height);
 }
 function observeLobbyDock() {
   const dock = root.querySelector(".lobby-ready");
