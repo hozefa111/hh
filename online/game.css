@@ -166,3 +166,15 @@ body.live-game.bidding{--phase-height:92px}
 @keyframes heroFloat{0%,100%{transform:translateY(var(--hero-y)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}50%{transform:translateY(calc(var(--hero-y) - 8px)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}}
 
 .game-dialog p{white-space:pre-line}
+
+/* Lobby is document-scrolled; only the active card table owns a locked viewport.
+   The dock's measured height reserves content space, including large text/insets. */
+.lobby-main{width:100%;min-width:0;padding-bottom:calc(var(--lobby-dock-height,112px) + 24px)}
+.lobby-main .lobby-seats{grid-template-columns:repeat(3,minmax(0,1fr))}
+.lobby-main .seat-card{min-width:0;overflow-wrap:anywhere;word-break:break-word}
+.lobby-ready{position:fixed;left:0;right:0;bottom:0;z-index:12;margin:0;border-radius:18px 18px 0 0;background:#13271ff5;box-shadow:0 -5px 18px #0004;display:flex;align-items:center;justify-content:center;gap:12px;padding:10px 16px;padding:10px max(16px,env(safe-area-inset-right)) calc(10px + env(safe-area-inset-bottom)) max(16px,env(safe-area-inset-left));text-align:left}
+.lobby-ready p{margin:0;min-width:0;max-width:500px;font-size:12px;line-height:1.4;flex:1;overflow-wrap:anywhere}
+.lobby-ready .gold{min-width:0;min-height:48px;max-width:55%;font-size:13px;white-space:normal;flex:0 1 auto}
+.room-lobby footer{padding-bottom:calc(var(--lobby-dock-height,112px) + 20px)}
+.room-lobby .pause-banner,.room-lobby #notice:not(:empty){bottom:calc(var(--lobby-dock-height,112px) + 12px)}
+@media(max-width:650px){.lobby-main .lobby-seats{grid-template-columns:repeat(2,minmax(0,1fr))}}

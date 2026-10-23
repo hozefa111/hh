@@ -1,4 +1,5 @@
 "use strict";
+document.documentElement.dataset.lobbyUi = "scroll-dock-v1";
 const R = KaliRules, root = document.getElementById("game");
 const emulator = (window.KALI_EMULATOR === true || new URLSearchParams(location.search).get("emulator") === "1") && ["localhost", "127.0.0.1", "appassets.androidplatform.net"].includes(location.hostname);
 const config = emulator ? { ...KALI_CONFIG, projectId: "demo-three-patti", apiKey: "demo-key", databaseURL: "https://demo-three-patti-default-rtdb.firebaseio.com" } : KALI_CONFIG;
@@ -378,9 +379,32 @@ function lobby() {
   const me = room.members[uid()], isOwner = room.admin === uid(), seated = R.ordered(room), hasHand = R.active(room);
   return `<section class="room-head ${hasHand ? "live" : ""}"><div><span class="eyebrow">${room.mode} PLAYERS \xB7 250 POINTS</span><h1>${esc(room.sessionName || "Table " + room.code)}</h1><p class="room-code">Room ${esc(room.code)}</p><p>Clockwise seats \xB7 ${room.status === "stopped" ? "Session complete" : "Session stays open until admin stops it"}</p></div><div class="room-actions">${btn("\u2197 Invite", "share", false, "gold")}${isOwner && room.status !== "stopped" ? btn("Stop Session", "stop", false, "danger") : ""}</div></section>${hasHand ? table() : `<div class="lobby-seats">${Array.from({ length: room.mode }, (_, i) => {
     const p = seated.find((p2) => p2.seat === i + 1);
-    return `<article class="seat-card ${(p == null ? void 0 : p.uid) === uid() ? "self" : ""}"><span class="seat-number">SEAT ${i + 1}</span><div class="avatar">${(p == null ? void 0 : p.kind) === "bot" ? "\u265F" : esc(((p == null ? void 0 : p.name) || "?").slice(0, 1).toUpperCase())}</div><h3>${esc((p == null ? void 0 : p.name) || "Empty seat")}</h3><span class="badge">${p ? p.kind === "bot" ? "COMPUTER" : "HUMAN" : "OPEN"}</span><p>${p ? status(p) : "Ready for a player"}</p>${!p && room.status !== "stopped" ? `${(me == null ? void 0 : me.approved) ? btn("Take seat " + (i + 1), "claim-seat:" + (i + 1), busy, "gold") : ""}${isOwner ? btn("+ Computer", "bot:" + (i + 1)) : ""}` : ""}</article>`;
-  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : !hasHand ? `<section class="ready-bar"><p>${room.paused ? "Session paused \xB7 Admin must Resume before Ready." : R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", room.paused || !seatConnected() || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : `<p class="muted">${seated.length === room.mode ? "All seats are occupied. Wait for an empty seat." : "Choose an empty seat to join the table."}</p>${!(me == null ? void 0 : me.approved) && (me == null ? void 0 : me.requestedPlayerId) ? btn("Confirm my player profile", "confirm-profile", busy, "gold") : ""}`}</section>` : ""}<div class="toolbar">${room.status !== "stopped" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + pauseControl() : ""}${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") + btn("Rename session", "rename-session") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${btn("Check speed", "diagnostics")}${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${pauseBanner()}`;
+    return `<article data-seat="${i + 1}" class="seat-card ${(p == null ? void 0 : p.uid) === uid() ? "self" : ""}"><span class="seat-number">SEAT ${i + 1}</span><div class="avatar">${(p == null ? void 0 : p.kind) === "bot" ? "\u265F" : esc(((p == null ? void 0 : p.name) || "?").slice(0, 1).toUpperCase())}</div><h3>${esc((p == null ? void 0 : p.name) || "Empty seat")}</h3><span class="badge">${p ? p.kind === "bot" ? "COMPUTER" : "HUMAN" : "OPEN"}</span><p>${p ? status(p) : "Ready for a player"}</p>${!p && room.status !== "stopped" ? `${(me == null ? void 0 : me.approved) ? btn("Take seat " + (i + 1), "claim-seat:" + (i + 1), busy, "gold") : ""}${isOwner ? btn("+ Computer", "bot:" + (i + 1)) : ""}` : ""}</article>`;
+  }).join("")}</div>`}${room.lastResult && !hasHand ? results() : ""}${room.status === "stopped" ? `<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>` : ""}<div class="toolbar">${room.status !== "stopped" ? btn("\u21BB Reconnect", "reconnect", reconnectBusy) + pauseControl() : ""}${btn("Session scores", "scores")}${btn("Hand history", "history")}${isOwner ? btn("Manage table", "manage") + btn("Rename session", "rename-session") : btn("Leave room", "leave", room.status === "stopped")}</div>${scoreOpen ? `<section class="panel"><h2>Current session \xB7 starts from zero</h2>${btn("Check speed", "diagnostics")}${scoreboard()}</section>` : ""}${historyOpen ? history() : ""}${isOwner && screen === "manage" ? management() : ""}${pauseBanner()}`;
 }
+function lobbyReady() {
+  const me = room.members[uid()], isOwner = room.admin === uid(), seated = R.ordered(room);
+  return `<section class="ready-bar lobby-ready" aria-label="Lobby readiness"><p>${room.paused ? "Session paused \xB7 Admin must Resume before Ready." : R.allReadyExceptAdmin(room) ? "Waiting for Admin to start next hand." : "Review your result, then mark Ready."}</p>${(me == null ? void 0 : me.seat) !== null && (me == null ? void 0 : me.approved) ? btn(isOwner ? room.startedAt ? "READY \xB7 Deal next hand" : "READY \xB7 Start session" : me.ready ? "\u2713 Ready" : "I am READY", "ready", room.paused || !seatConnected() || (isOwner ? !R.allReadyExceptAdmin(room) : me.ready), "gold") : `<p class="muted">${seated.length === room.mode ? "All seats occupied. Waiting for a seat." : "Choose an empty seat to join."}</p>${!(me == null ? void 0 : me.approved) && (me == null ? void 0 : me.requestedPlayerId) ? btn("Confirm my player profile", "confirm-profile", busy, "gold") : ""}`}</section>`;
+}
+let observedDock = null;
+const dockObserver = typeof ResizeObserver === "function" ? new ResizeObserver(() => measureLobbyDock()) : null;
+function measureLobbyDock() {
+  if (!observedDock) return;
+  const height = Math.ceil(observedDock.getBoundingClientRect().height) + "px";
+  if (root.style.getPropertyValue("--lobby-dock-height") !== height) root.style.setProperty("--lobby-dock-height", height);
+}
+function observeLobbyDock() {
+  const dock = root.querySelector(".lobby-ready");
+  if (dock !== observedDock) {
+    if (observedDock) dockObserver == null ? void 0 : dockObserver.unobserve(observedDock);
+    observedDock = dock;
+    if (dock) {
+      dockObserver == null ? void 0 : dockObserver.observe(dock);
+      measureLobbyDock();
+    }
+  }
+}
+window.addEventListener("resize", measureLobbyDock, { passive: true });
 function status(p) {
   return !p.connected && p.kind !== "bot" ? "\u25CB Disconnected" : p.ready ? "\u2713 Ready" : esc(p.status);
 }
@@ -483,12 +507,12 @@ function updateBidControls() {
   form.querySelector("[data-action=bid-max]").disabled = mutationBlocked() || value === 250;
   select.disabled = mutationBlocked();
 }
-const renderSlots = /* @__PURE__ */ new Set(["room-head", "game-meta", "partner-status", "table-wrap", "felt", "table-mark", "centre-trick", "last-trick", "turn-bar", "hand-hint", "my-hand", "hand-fan", "phase-area", "live-tools", "table-drawer", "drawer-top", "drawer-body", "pause-banner", "connection-recovery", "drawer-scrim"]);
+const renderSlots = /* @__PURE__ */ new Set(["room-head", "lobby-seats", "lobby-ready", "game-meta", "partner-status", "table-wrap", "felt", "table-mark", "centre-trick", "last-trick", "turn-bar", "hand-hint", "my-hand", "hand-fan", "phase-area", "live-tools", "table-drawer", "drawer-top", "drawer-body", "pause-banner", "connection-recovery", "drawer-scrim"]);
 function renderKey(node) {
   if (node.nodeType !== 1) return null;
   const tag = node.tagName;
   if (node.id) return tag + "#" + node.id;
-  for (const field of ["data-action", "data-player", "data-target", "name"]) if (node.hasAttribute(field)) return tag + ":" + field + ":" + node.getAttribute(field);
+  for (const field of ["data-action", "data-player", "data-seat", "data-target", "name"]) if (node.hasAttribute(field)) return tag + ":" + field + ":" + node.getAttribute(field);
   for (const cls of node.classList) if (renderSlots.has(cls)) return tag + "." + cls;
   return null;
 }
@@ -530,7 +554,7 @@ function patchChildren(parent, next) {
   }
   for (const n of old) if (!used.has(n)) n.remove();
 }
-let renderedMarkup = null;
+let renderedMarkup = null, renderedView = null;
 function patchGame(markup) {
   if (markup === renderedMarkup) return;
   const template = document.createElement("template");
@@ -546,14 +570,18 @@ function renderNow() {
   if (renderFrame !== null) cancelAnimationFrame(renderFrame);
   renderFrame = null;
   root.dataset.revision = (_a = room == null ? void 0 : room.revision) != null ? _a : "";
-  const scroll = window.scrollY;
+  const view = room ? room.id + ":" + (R.active(room) ? "table" : "lobby") : loadingRoom ? "loading" : "home";
+  const newView = view !== renderedView;
+  renderedView = view;
   const drafts = Array.from(root.querySelectorAll("form")).map((f) => ({ id: f.id, target: f.dataset.target, context: f.id === "bid" ? f.dataset.hand + ":" + f.dataset.generation : null, values: Array.from(f.querySelectorAll("input,select")).map((i) => ({ name: i.name, value: i.value })) }));
   const focus = document.activeElement, focused = (focus == null ? void 0 : focus.name) ? { name: focus.name, form: (_b = focus.form) == null ? void 0 : _b.id, start: focus.selectionStart } : null;
   document.body.classList.toggle("reduced", reduced);
-  const live = !!room && R.active(room);
+  const live = !!(room && R.active(room));
   document.body.classList.toggle("live-game", live);
+  const dock = !!room && !live && room.status !== "stopped";
+  document.body.classList.toggle("room-lobby", dock);
   document.body.classList.toggle("bidding", live && room.hand.phase === "auction");
-  patchGame(header() + `<main class="${live ? "live-main" : ""}">${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? recoveryPanel() + lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main><footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`);
+  patchGame(header() + `<main class="${live ? "live-main" : dock ? "lobby-main" : ""}">${error ? `<p class="error">${esc(error)}</p>` : ""}${room ? recoveryPanel() + lobby() : loadingRoom ? '<section class="panel"><h2>Connecting to your table\u2026</h2><p>Restoring seats and your private hand.</p></section>' : home()}</main>${dock ? lobbyReady() : ""}<footer>3 PATTI PRO \xB7 Same players. Same scorecard.</footer>`);
   for (const draft of drafts) {
     const form = Array.from(root.querySelectorAll("form")).find((f) => f.id === draft.id && f.dataset.target === draft.target && (draft.context === null || draft.context === f.dataset.hand + ":" + f.dataset.generation));
     if (!form && draft.id === "bid") {
@@ -577,7 +605,8 @@ function renderNow() {
     }
   }
   if (window.KALI_NATIVE_PENDING || mutationBlocked()) disableControls();
-  if (window.scrollY !== (live ? 0 : scroll)) window.scrollTo(0, live ? 0 : scroll);
+  if (newView) window.scrollTo(0, 0);
+  observeLobbyDock();
   tick();
   animateCollection();
   if (!reduced) for (const kind of motionQueue.splice(0)) {
