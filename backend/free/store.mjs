@@ -54,12 +54,11 @@ export class GameStore {
  }
  async transact(id,key,fingerprint,fn){
   await this.track(id);let nextState;
-  const result=await this.db.transaction(async tx=>{
-   const path=key?'onlineState/'+id+'/receipts/'+key:null;
-   const [before,receipt]=await this.db.getMany(['onlineState/'+id,...(path?[path]:[])],tx);if(!before)throw Error('Room not found');
+  const path=key?'onlineState/'+id+'/receipts/'+key:null;
+  const result=await this.db.transactionRead(['onlineState/'+id,...(path?[path]:[])],async ([before,receipt])=>{if(!before)throw Error('Room not found');
    if(receipt){if(receipt.fingerprint!==fingerprint)throw Error('Command ID already used');nextState=before;return {writes:[],result:receipt.result};}
    const {next,result}=fn(before);nextState=next||before;if(!next)return {writes:[],result};
-   const links=await this.links(tx,before,next),writes=[...this.projection(before,next),...links];
+   const links=await this.links(null,before,next),writes=[...this.projection(before,next),...links];
    if(path)writes.push(this.db.set(path,{fingerprint,result,createdAt:new Date()},true));return {writes,result};
   });await this.track(id,nextState);return result;
  }

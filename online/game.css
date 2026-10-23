@@ -164,3 +164,5 @@ body.live-game.bidding{--phase-height:92px}
 .hero-cards .face:first-child{--hero-tilt:-18deg;--hero-x:10px;--hero-y:0px}
 .hero-cards .face:last-child{--hero-tilt:18deg;--hero-x:-10px;--hero-y:0px}
 @keyframes heroFloat{0%,100%{transform:translateY(var(--hero-y)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}50%{transform:translateY(calc(var(--hero-y) - 8px)) rotate(var(--hero-tilt)) translateX(var(--hero-x))}}
+
+.game-dialog p{white-space:pre-line}

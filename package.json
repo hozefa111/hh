@@ -17,7 +17,8 @@
     "test:presence": "node online/test/presence.browser.cjs",
     "test:compact-table": "node online/test/compact-table.browser.cjs",
     "test:smooth-controls": "node online/test/smooth-controls.browser.cjs",
-    "test:game-dialog": "node online/test/game-dialog.browser.cjs"
+    "test:game-dialog": "node online/test/game-dialog.browser.cjs",
+    "test:performance": "node online/test/performance.browser.cjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.3",

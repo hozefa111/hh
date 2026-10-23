@@ -19,7 +19,15 @@ jobs:
         with:
           distribution: temurin
           java-version: 21
-      - run: npm ci && npm ci --prefix functions/online && npm ci --prefix backend/free
+      - name: Install web test dependencies
+        timeout-minutes: 6
+        run: npm ci --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
+      - name: Install emulator backend dependencies
+        timeout-minutes: 6
+        run: npm ci --prefix functions/online --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
+      - name: Install free Worker dependencies
+        timeout-minutes: 6
+        run: npm ci --prefix backend/free --no-audit --no-fund --fetch-timeout=30000 --fetch-retries=2
       - run: npm run build && npm test && npm run check
       - name: Free backend bundle, unit tests and deployment preflight
         run: npm run verify --prefix backend/free
@@ -28,7 +36,7 @@ jobs:
         run: |
           mkdir -p test-results
           python3 -m http.server 8765 --bind 127.0.0.1 >test-results/http.log 2>&1 &
-          npx --yes firebase-tools@15.34.0 emulators:exec --project demo-three-patti --only auth,firestore,database,functions 'npm run test:rules && npm run test:network && npm run test:browser && npm run test:legacy-labels && npm run test:native-origin && npm run test:table-feedback && npm run test:compact-table && npm run test:smooth-controls && npm run test:game-dialog && npm run test:session-deletion && npm run test:presence && KALI_WORKER_INTEGRATION=1 npm test --prefix backend/free'
+          npx --yes firebase-tools@15.34.0 emulators:exec --project demo-three-patti --only auth,firestore,database,functions 'npm run test:rules && npm run test:network && npm run test:browser && npm run test:legacy-labels && npm run test:native-origin && npm run test:table-feedback && npm run test:compact-table && npm run test:smooth-controls && npm run test:game-dialog && npm run test:performance && npm run test:session-deletion && npm run test:presence && KALI_WORKER_INTEGRATION=1 npm test --prefix backend/free'
       - uses: actions/upload-artifact@v4
         if: always()
         with:

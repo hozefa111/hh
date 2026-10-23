@@ -18,9 +18,13 @@ export function decode(v){
  throw Error('Unsupported Firestore field');
 }
 export class Firestore {
- constructor(project,token,fetcher=(...args)=>fetch(...args),{origin='https://firestore.googleapis.com'}={}){this.project=project;this.token=token;this.fetcher=fetcher;this.origin=origin;this.root=`projects/${project}/databases/(default)/documents`;}
+ constructor(project,token,fetcher=(...args)=>fetch(...args),{origin='https://firestore.googleapis.com',timings=null}={}){this.project=project;this.token=token;this.fetcher=fetcher;this.origin=origin;this.timings=timings;this.root=`projects/${project}/databases/(default)/documents`;}
  name(path){if(!path.split('/').every(s=>/^[a-zA-Z0-9_-]{1,240}$/.test(s)))throw Error('Invalid document path');return this.root+'/'+path;}
  async request(suffix,method='GET',body){
+  const phase=suffix.endsWith(':commit')?'commit':suffix.endsWith(':beginTransaction')?'begin':suffix.endsWith(':rollback')?'rollback':'read';
+  return this.timings?this.timings.measure(phase,()=>this.rawRequest(suffix,method,body)):this.rawRequest(suffix,method,body);
+ }
+ async rawRequest(suffix,method='GET',body){
   const res=await this.fetcher(this.origin+'/v1/'+this.root+suffix,{method,headers:{Authorization:'Bearer '+await this.token(),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
   const data=await res.json();if(!res.ok){const e=Error('Database operation failed');e.status=res.status;e.code=data.error?.status;throw e;}return data;
  }
@@ -32,6 +36,9 @@ export class Firestore {
  async getMany(paths,transaction){
   const documents=paths.map(path=>this.name(path));
   const rows=await this.request(':batchGet','POST',{documents,...(transaction?{transaction}:{})});
+  return this.decodeMany(documents,rows);
+ }
+ decodeMany(documents,rows){
   const found=new Map(rows.filter(r=>r.found).map(r=>[r.found.name,r.found]));
   return documents.map(name=>{const doc=found.get(name);if(!doc)return null;const data=decode({mapValue:{fields:doc.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:doc.updateTime||null});return data;});
  }
@@ -44,6 +51,20 @@ export class Firestore {
  }
  set(path,value,create=false){return {update:{name:this.name(path),fields:encode(value).mapValue.fields},...(create?{currentDocument:{exists:false}}:{})};}
  delete(path){return {delete:this.name(path)};}
+ // Start and read a transaction in one round trip. Used only for the hot move
+ // path; general history/deletion transactions keep the existing interface.
+ async transactionRead(paths,fn){
+  const documents=paths.map(path=>this.name(path));
+  for(let attempt=0;attempt<5;attempt++){
+   let transaction;
+   try{
+    const rows=await this.request(':batchGet','POST',{documents,newTransaction:{readWrite:{}}});
+    transaction=rows.find(r=>r.transaction)?.transaction;if(!transaction)throw Error('Database transaction unavailable');
+    const {writes,result}=await fn(this.decodeMany(documents,rows));
+    await this.request(':commit','POST',{transaction,writes});return result;
+   }catch(e){if(transaction)await this.request(':rollback','POST',{transaction}).catch(()=>{});if(e.code!=='ABORTED'||attempt===4)throw e;}
+  }
+ }
  async transaction(fn){
   for(let attempt=0;attempt<5;attempt++){
    const {transaction}=await this.request(':beginTransaction','POST',{options:{readWrite:{}}});
