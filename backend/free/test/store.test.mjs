@@ -151,3 +151,8 @@ test('hot transactions combine start/read, retry conflicts and never commit with
  const result=await db.transactionRead(['players/test'],async rows=>({writes:[],result:rows[0].score}));assert.equal(result,10);assert.equal(reads,2);assert.equal(commits,2);assert.equal(rollbacks,1);
  let callback=false;const broken=new Firestore('demo',async()=>'test',async(url)=>{assert(url.endsWith(':batchGet'));return Response.json([]);});await assert.rejects(broken.transactionRead(['players/test'],async()=>{callback=true;return{writes:[],result:null};}),/transaction unavailable/);assert.equal(callback,false);
 });
+test('quota failure is explicit, shared across request adapters, and never retries database writes',async()=>{
+ let calls=0;const fetcher=async()=>{calls++;return Response.json({error:{status:'RESOURCE_EXHAUSTED'}},{status:429});};const a=new Firestore('quota-test',async()=>'fake',fetcher),b=new Firestore('quota-test',async()=>'fake',fetcher);
+ await assert.rejects(a.get('players/p'),e=>e.status===429&&e.code==='RESOURCE_EXHAUSTED'&&e.retryAfter===300);
+ await assert.rejects(b.get('players/p'),e=>e.status===429&&e.retryAfter>0);assert.equal(calls,1);
+});

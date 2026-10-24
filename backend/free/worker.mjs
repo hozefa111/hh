@@ -1,5 +1,6 @@
 import {DurableObject} from 'cloudflare:workers';
-import {Firestore} from './firestore.mjs';
+import {failure} from './errors.mjs';
+import {Firestore,quotaError} from './firestore.mjs';
 import {Identity} from './identity.mjs';
 import {Timings,KeyedQueue,Slots} from './coordination.mjs';
 import {GameStore} from './store.mjs';
@@ -11,7 +12,7 @@ const id=()=>crypto.randomUUID().replaceAll('-',''),code=()=>Array.from({length:
 export default {async fetch(request,env){
  const origin=request.headers.get('Origin'),headers={'Cache-Control':'no-store','Vary':'Origin'};
  if(origin&&!origins.has(origin))return Response.json({error:'Origin not allowed'},{status:403,headers});
- if(origin)Object.assign(headers,{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Expose-Headers':'Server-Timing, X-Request-ID'});
+ if(origin)Object.assign(headers,{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Expose-Headers':'Server-Timing, X-Request-ID, Retry-After'});
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers});
  if(request.method!=='POST'||!['/kaliApi','/kaliConsumeExchange'].includes(new URL(request.url).pathname))return Response.json({error:'POST required'},{status:405,headers});
  if(Number(request.headers.get('Content-Length')||0)>16384)return new Response(null,{status:413,headers});
@@ -58,13 +59,14 @@ export class KaliCoordinator extends DurableObject {
    at=Math.min(at,Math.max(due,retries.get('retry:'+r.id)?.until||0));
   }
   for(const {id}of deletions.values())at=Math.min(at,Math.max(Date.now()+1000,retries.get('retry:'+id)?.until||0));
-  if(Number.isFinite(at))await this.setEarlierAlarm(Math.max(Date.now()+100,at,this.alarmRetryAfter));
+  if(Number.isFinite(at))await this.setEarlierAlarm(Math.max(Date.now()+100,at,this.alarmRetryAfter,Date.now()+(quotaError(this.env.FIREBASE_PROJECT_ID)?.retryAfter||0)*1000));
  });}
  async setEarlierAlarm(at){const old=await this.storage.getAlarm();if(old===null||old>at)await this.storage.setAlarm(at);}
  async cleanupAlarm(at){return this.locks.run(':schedule',()=>this.setEarlierAlarm(Math.max(at,this.alarmRetryAfter)));}
  async rate(key){const now=Date.now(),k='limit:'+key;await this.storage.transaction(async tx=>{const old=await tx.get(k),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90)throw Error('Too many requests; try again shortly');await tx.put(k,{at:same?old.at:now,count});});await this.cleanupAlarm(now+60000);}
  async fetch(request){const timings=new Timings(),requestId=crypto.randomUUID();
   try{
+   const blocked=quotaError(this.env.FIREBASE_PROJECT_ID);if(blocked)throw blocked;
    const text=await request.text();if(text.length>16384)throw Error('Request too large');const body=JSON.parse(text);
    let result;
    if(new URL(request.url).pathname==='/kaliConsumeExchange'){
@@ -106,7 +108,7 @@ export class KaliCoordinator extends DurableObject {
     };
     if(roomId)await this.locks.run('room:'+roomId,execute,timings);else await execute();
    }return Response.json({...result,serverNow:Date.now()},{headers:timings.headers(requestId)});
-  }catch(e){return Response.json({error:publicError(e)},{status:400,headers:timings.headers(requestId)});}
+  }catch(e){return failure(e,timings.headers(requestId));}
  }
  async realtime(path,method='GET',value){
   const url=`https://${this.env.FIREBASE_PROJECT_ID}-default-rtdb.firebaseio.com${path}.json`,res=await fetch(url,{method,headers:{Authorization:'Bearer '+await this.identity.token(),'Content-Type':'application/json'},...(method==='GET'?{}:{body:JSON.stringify(value)}),signal:AbortSignal.timeout(10000)});
@@ -117,6 +119,7 @@ export class KaliCoordinator extends DurableObject {
   this.alarmFlight=this.runAlarm();try{return await this.alarmFlight;}finally{this.alarmFlight=null;}
  }
  async runAlarm(){
+  const blocked=quotaError(this.env.FIREBASE_PROJECT_ID);if(blocked){await this.storage.setAlarm(Date.now()+blocked.retryAfter*1000);return;}
   const rooms=await this.storage.list({prefix:'room:'}),deletions=await this.storage.list({prefix:'delete:'}),ids=new Set([...rooms.values(),...deletions.values()].map(r=>r.id));
   for(const id of ids){
    if(this.runningRooms.has(id))continue;this.runningRooms.add(id);
@@ -157,4 +160,3 @@ export class KaliCoordinator extends DurableObject {
   await this.arm();
  }
 }
-function publicError(e){if(e?.status||e?.name==='JWTExpired'||e?.code?.startsWith('ERR_'))return 'Server connection or sign-in unavailable; reconnect and retry';return String(e?.message||'Action failed').slice(0,180);}

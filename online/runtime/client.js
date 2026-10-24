@@ -16,7 +16,8 @@ let user = null, admin = false, room = null, own = { cards: [] }, profiles = [],
 let pendingSince = 0;
 const speedRows = [], speedSnapshots = /* @__PURE__ */ new Map(), speedPending = /* @__PURE__ */ new Set();
 let uncertainCommand = null;
-let recoveryTimer = null, recoveryAttempts = 0;
+let recoveryTimer = null, recoveryAttempts = 0, pendingRetryAt = 0;
+let databaseRetryAt = 0;
 function pendingKey(id = room == null ? void 0 : room.id) {
   return "kaliPending:" + uid() + ":" + id;
 }
@@ -49,7 +50,7 @@ function recoverPending() {
     recoveryAttempts++;
     await submitMove(body);
     recoverPending();
-  }, Math.min(8e3, 1e3 * 2 ** recoveryAttempts));
+  }, Math.max(0, pendingRetryAt - Date.now(), Math.min(8e3, 1e3 * 2 ** recoveryAttempts)));
 }
 const localActions = /* @__PURE__ */ new Set(["scores", "history", "close-panel", "diagnostics", "sound", "motion", "manage"]);
 const mutationBlocked = () => busy || !!uncertainCommand;
@@ -327,6 +328,9 @@ async function api(body, endpoint = "kaliApi") {
     }
     if (!res.ok) {
       const e = Error(value.error || "Action failed");
+      const retrySeconds = Number(res.headers.get("Retry-After"));
+      if (Number.isFinite(retrySeconds) && retrySeconds > 0) e.retryAt = Date.now() + Math.min(300, retrySeconds) * 1e3;
+      if (value.code === "RESOURCE_EXHAUSTED") databaseRetryAt = e.retryAt || Date.now() + 3e5;
       e.retryable = res.status === 401 || res.status === 429 || res.status >= 500 || /^Server connection/.test(value.error || "");
       throw e;
     }
@@ -367,9 +371,11 @@ async function submitMove(body) {
     if (current()) {
       uncertainCommand = null;
       recoveryAttempts = 0;
+      pendingRetryAt = 0;
     }
     return true;
   } catch (e) {
+    pendingRetryAt = e.retryAt || 0;
     if (!e.retryable) forgetPending(body);
     if (current()) uncertainCommand = e.retryable ? body : null;
     if (!e.retryable && ((_a = body.action) == null ? void 0 : _a.type) === "play" && submittedCardTurn === JSON.stringify([owner, body.roomId, body.handId, body.turnGeneration])) submittedCardTurn = null;
@@ -475,7 +481,7 @@ async function reconnectSeat() {
   }
 }
 function header() {
-  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine ? "" : "offline"}">${!navigator.onLine ? "\u25CF RECONNECTING" : room && !seatConnected() ? "\u25CB RECONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(soundEnabled ? "Sound on" : "Sound off", "sound", false, "quiet")}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
+  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine && databaseRetryAt <= Date.now() ? "" : "offline"}">${databaseRetryAt > Date.now() ? "\u25CF DATABASE LIMIT" : !navigator.onLine ? "\u25CF RECONNECTING" : room && !seatConnected() ? "\u25CB RECONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(soundEnabled ? "Sound on" : "Sound off", "sound", false, "quiet")}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
 }
 function home() {
   const activeRooms = memberships.filter((r) => !["stopped", "Removed"].includes(r.status));

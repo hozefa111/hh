@@ -1,3 +1,5 @@
+const quotaUntil=new Map();
+export function quotaError(project){const until=quotaUntil.get(project)||0;if(until<=Date.now())return null;const e=Error('Firebase database quota exhausted. Your rooms and scores are preserved. Try again after the quota recovers.');e.status=429;e.code='RESOURCE_EXHAUSTED';e.retryAfter=Math.ceil((until-Date.now())/1000);return e;}
 // Firestore REST keeps the existing Spark database and ledger; credentials stay server-only.
 export function encode(value) {
  if(value===null)return {nullValue:null};
@@ -25,8 +27,9 @@ export class Firestore {
   return this.timings?this.timings.measure(phase,()=>this.rawRequest(suffix,method,body)):this.rawRequest(suffix,method,body);
  }
  async rawRequest(suffix,method='GET',body){
+  const blocked=quotaError(this.project);if(blocked)throw blocked;
   const res=await this.fetcher(this.origin+'/v1/'+this.root+suffix,{method,headers:{Authorization:'Bearer '+await this.token(),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{}),signal:AbortSignal.timeout(15000)});
-  const data=await res.json();if(!res.ok){const e=Error('Database operation failed');e.status=res.status;e.code=data.error?.status;throw e;}return data;
+  const data=await res.json();if(!res.ok){const e=Error('Database operation failed');e.status=res.status;e.code=data.error?.status;if(e.code==='RESOURCE_EXHAUSTED'){quotaUntil.set(this.project,Date.now()+300000);throw quotaError(this.project);}throw e;}return data;
  }
  async get(path,transaction){
   const name=this.name(path);
