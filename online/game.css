@@ -182,3 +182,6 @@ body.live-game.bidding{--phase-height:92px}
 /* Public move playback: identify the seat and keep every trick card readable. */
 .table-seat.just-played{border-color:#f3d47f;box-shadow:0 0 0 2px #f3d47f80,0 0 16px #f3d47f35}
 .played-card.just-played .face{outline:2px solid #f3d47f;outline-offset:1px}
+
+/* Final choice uses a full-size text control, separate from the +/- buttons. */
+.live-main #bid .action-bar>[data-action="keep-bid"]{flex:1.7;padding:3px;font-size:10px;line-height:12px}

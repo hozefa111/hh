@@ -30,7 +30,7 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
   if(h.phase==='auction'){
    await current.page.locator('#bid').waitFor();
    if(h.auction.length===1){await current.page.locator('#bid select').selectOption('180');A.equal(await current.page.locator('#bid button.gold').textContent(),'Bid 180');await current.page.screenshot({path:artifacts+'/bid-180-mobile.png',fullPage:true});report.screens.push('bid-180-mobile.png');await current.page.locator('#bid button.gold').click();}
-   else await current.page.locator(h.finalBid?'[data-action=bid-keep]':'[data-action=pass]').click();
+   else await current.page.locator(h.finalBid?'[data-action=keep-bid]':'[data-action=pass]').click();
    await waitFor(async()=>((await db.doc('onlineState/'+roomId).get()).data()).revision>r.revision,'bid/pass committed through UI');
   }
   else if(h.phase==='trump'){await current.page.locator('[data-action="trump:H"]').click();await waitFor(async()=>((await db.doc('onlineState/'+roomId).get()).data()).hand.phase==='partners','Hukum chosen through UI');}
@@ -92,7 +92,7 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
   if(h.phase==='playing'&&h.tricks.length===0&&h.trick.length===0){await waitFor(async()=>await owner.evaluate(()=>room?.hand?.phase==='playing'),'six table');await owner.evaluate(()=>window.scrollTo(0,0));await owner.screenshot({path:artifacts+'/table-six-mobile.png',fullPage:true});report.screens.push('table-six-mobile.png');}
   if(h.turn===adminUser.uid){
    await owner.bringToFront();await owner.waitForFunction(({id,generation})=>room?.hand?.id===id&&room.hand.turnGeneration===generation&&seatConnected()&&!busy&&Number(root.dataset.revision)===room.revision,{id:h.id,generation:h.turnGeneration});
-   if(h.phase==='auction')await owner.locator(h.finalBid?'[data-action=bid-keep]':'[data-action=pass]').click();
+   if(h.phase==='auction')await owner.locator(h.finalBid?'[data-action=keep-bid]':'[data-action=pass]').click();
    else if(h.phase==='trump')await owner.locator('[data-action="trump:H"]').click();
    else if(h.phase==='partners'){await owner.locator('#partners button').click();}
    else{await owner.locator('.hand-card.legal').first().click();await owner.locator('[data-action=confirm-card]').click();}
