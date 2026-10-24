@@ -156,3 +156,10 @@ test('quota failure is explicit, shared across request adapters, and never retri
  await assert.rejects(a.get('players/p'),e=>e.status===429&&e.code==='RESOURCE_EXHAUSTED'&&e.retryAfter===300);
  await assert.rejects(b.get('players/p'),e=>e.status===429&&e.retryAfter>0);assert.equal(calls,1);
 });
+test('membership summaries skip unchanged readiness but retain removal and session-status transitions',()=>{
+ const db=new Firestore('demo',async()=>'fake'),store=new GameStore(db,()=>{});let r=R.create({id:'membership_check',code:'ABCDEFGH',uid:'owner',playerId:'p',name:'Owner',mode:4},1);
+ r=R.command(r,'guest',{type:'join',playerId:'pg',name:'Guest'},2,n=>n-1);r=R.command(r,'guest',{type:'claimSeat',seat:2},3,n=>n-1);
+ const ready=R.command(r,'guest',{type:'ready'},4,n=>n-1),writes=store.projection(r,ready),path=db.name('onlineMemberships/guest/rooms/'+r.id);assert(!writes.some(w=>w.update?.name===path));assert(writes.some(w=>w.update?.name===db.name('onlineRooms/'+r.id)),'public readiness remains live');
+ const removed=R.command(r,'owner',{type:'remove',target:'guest'},5,n=>n-1);assert.equal(store.projection(r,removed).find(w=>w.update?.name===path).update.fields.status.stringValue,'Removed');
+ const stopped=R.command(r,'owner',{type:'stop'},6,n=>n-1);assert.equal(store.projection(r,stopped).find(w=>w.update?.name===path).update.fields.status.stringValue,'stopped');
+});

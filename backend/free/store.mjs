@@ -26,7 +26,7 @@ export class GameStore {
     if(!was||!old||old.handId!==own.handId||JSON.stringify(old.cards)!==JSON.stringify(own.cards))writes.push(db.set(root+'/private/'+p.uid,own));
    }
    if(p.kind==='human'&&!p.reservation&&next.historyDeleted)writes.push(db.delete('onlineMemberships/'+p.uid+'/rooms/'+next.id));
-   else if(p.kind==='human'&&!p.reservation&&(!prior||prior.status!==p.status||before.status!==next.status||before.sessionName!==next.sessionName))writes.push(db.set('onlineMemberships/'+p.uid+'/rooms/'+next.id,{roomId:next.id,code:next.code,status:p.status==='Removed'?'Removed':next.status,createdAt:next.createdAt,sessionName:next.sessionName||'Online · '+next.code}));
+   else if(p.kind==='human'&&!p.reservation&&(!prior||(prior.status==='Removed')!==(p.status==='Removed')||before.status!==next.status||before.sessionName!==next.sessionName))writes.push(db.set('onlineMemberships/'+p.uid+'/rooms/'+next.id,{roomId:next.id,code:next.code,status:p.status==='Removed'?'Removed':next.status,createdAt:next.createdAt,sessionName:next.sessionName||'Online · '+next.code}));
   }
   const changed=!before||before.sessionName!==next.sessionName||before.startedAt!==next.startedAt||before.endedAt!==next.endedAt||before.completed!==next.completed||before.status!==next.status||JSON.stringify(before.totals)!==JSON.stringify(next.totals);
   if(next.historyDeleted)writes.push(db.delete('sessions/'+next.id));

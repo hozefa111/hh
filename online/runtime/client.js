@@ -801,6 +801,7 @@ function render() {
 }
 function renderNow() {
   var _a, _b, _c, _d;
+  syncHistory();
   if (!canPlayCards()) resetCardTaps();
   if (renderFrame !== null) cancelAnimationFrame(renderFrame);
   renderFrame = null;
@@ -904,7 +905,7 @@ function tick() {
 }
 setInterval(tick, 250);
 async function attachPresence(id) {
-  const owner = uid(), ctx = { active: true, transport: false, epoch: 0, pending: false, ref: null, retry: null, failures: 0, access: false, attempt: null };
+  const owner = uid(), ctx = { active: true, transport: false, epoch: 0, pending: false, ref: null, retry: null, failures: 0, nextAttempt: 0, access: false, attempt: null };
   const valid = (epoch) => ctx.active && subscribedRoomId === id && uid() === owner && ctx.epoch === epoch;
   const connected = presence.ref(".info/connected"), ownConnections = presence.ref("onlinePresence/" + id + "/" + owner + "/connections");
   let onOwn = null;
@@ -917,13 +918,21 @@ async function attachPresence(id) {
   }
   function retry() {
     if (!ctx.active || ctx.retry || !ctx.transport && ctx.access) return;
+    ctx.nextAttempt = Math.max(ctx.nextAttempt, Date.now() + Math.min(6e4, 1e3 * 2 ** Math.min(ctx.failures++, 6)));
     ctx.retry = setTimeout(() => {
       ctx.retry = null;
       repair();
-    }, Math.min(1e4, 1e3 * 2 ** Math.min(ctx.failures++, 4)));
+    }, Math.max(0, ctx.nextAttempt - Date.now()));
   }
-  async function repair() {
+  async function repair(force = false) {
     var _a;
+    if (force) {
+      clearTimeout(ctx.retry);
+      ctx.retry = null;
+      ctx.nextAttempt = 0;
+      ctx.failures = 0;
+    }
+    if (Date.now() < ctx.nextAttempt) return;
     if (!ctx.active || ctx.pending || !navigator.onLine || ctx.access && !ctx.transport) return;
     if (connectionReady && ctx.ref && ((_a = room == null ? void 0 : room.members[owner]) == null ? void 0 : _a.connected) === true) {
       recoverPending();
@@ -961,6 +970,7 @@ async function attachPresence(id) {
       connection = ref;
       connectionReady = true;
       ctx.failures = 0;
+      ctx.nextAttempt = 0;
       if (ctx.retry) {
         clearTimeout(ctx.retry);
         ctx.retry = null;
@@ -1002,7 +1012,7 @@ async function attachPresence(id) {
       }
       connectionReady = false;
       render();
-    } else repair();
+    } else repair(true);
   });
   const watchdog = setInterval(() => {
     if (!document.hidden) {
@@ -1094,6 +1104,31 @@ function receiveRoomSnapshot(next) {
   recoverPending();
   render();
 }
+let historyUnsub = null, historyOwner = null, historyEpoch = 0;
+function stopHistory() {
+  historyEpoch++;
+  historyUnsub == null ? void 0 : historyUnsub();
+  historyUnsub = null;
+  historyOwner = null;
+}
+function syncHistory() {
+  const key = historyOpen && room ? uid() + ":" + room.id : null;
+  if (key === historyOwner) return;
+  stopHistory();
+  if (!key) return;
+  const id = room.id, epoch = historyEpoch;
+  historyOwner = key;
+  historyUnsub = db.collection("onlineRooms/" + id + "/hands").orderBy("handNumber", "desc").limit(25).onSnapshot((s) => {
+    if (epoch !== historyEpoch || (room == null ? void 0 : room.id) !== id) return;
+    const combined = new Map(records.map((r) => [r.handId, r]));
+    for (const d of s.docs) combined.set(d.id, d.data());
+    records = [...combined.values()].sort((a, b) => b.handNumber - a.handNumber);
+    historyMore = s.size === 25;
+    render();
+  }, (e) => {
+    if (epoch === historyEpoch) notice("Hand history unavailable. " + e.message);
+  });
+}
 async function enter(id) {
   clearCollection();
   connectionReady = false;
@@ -1133,14 +1168,7 @@ async function enter(id) {
     own = s.exists ? s.data() : { cards: [] };
     render();
   }, (e) => roomReadError(id, e)));
-  unsubs.push(db.collection("onlineRooms/" + id + "/hands").orderBy("handNumber", "desc").limit(25).onSnapshot((s) => {
-    if (subscribedRoomId !== id) return;
-    const combined = new Map(records.map((r) => [r.handId, r]));
-    for (const d of s.docs) combined.set(d.id, d.data());
-    records = [...combined.values()].sort((a, b) => b.handNumber - a.handNumber);
-    if (s.size < 25) historyMore = false;
-    if (historyOpen) render();
-  }));
+  unsubs.push(stopHistory);
   await attachPresence(id);
   localStorage.setItem("kaliRoom", id);
 }
@@ -1370,6 +1398,9 @@ async function loadProfiles() {
   profiles = (await db.collection("players").get()).docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   render();
 }
+function activeMembershipQuery(owner) {
+  return db.collection("onlineMemberships/" + owner + "/rooms").where("status", "in", ["lobby", "playing", "between"]);
+}
 let membershipUnsub = null;
 auth.onAuthStateChanged(async (current) => {
   if (user && user.uid !== (current == null ? void 0 : current.uid)) {
@@ -1401,7 +1432,7 @@ auth.onAuthStateChanged(async (current) => {
       const token = await user.getIdTokenResult();
       const role = await db.doc("admins/" + user.uid).get();
       admin = token.claims.admin === true || role.exists;
-      membershipUnsub = db.collection("onlineMemberships/" + user.uid + "/rooms").onSnapshot((s) => {
+      membershipUnsub = activeMembershipQuery(user.uid).onSnapshot((s) => {
         memberships = s.docs.map((d) => d.data());
         if (!room) render();
       });
@@ -1415,7 +1446,7 @@ auth.onAuthStateChanged(async (current) => {
 });
 window.kaliReconnect = () => {
   recoveryAttempts = 0;
-  presenceRecovery == null ? void 0 : presenceRecovery();
+  presenceRecovery == null ? void 0 : presenceRecovery(true);
   recoverPending();
   render();
 };
