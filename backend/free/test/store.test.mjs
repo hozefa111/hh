@@ -151,3 +151,15 @@ test('hot transactions combine start/read, retry conflicts and never commit with
  const result=await db.transactionRead(['players/test'],async rows=>({writes:[],result:rows[0].score}));assert.equal(result,10);assert.equal(reads,2);assert.equal(commits,2);assert.equal(rollbacks,1);
  let callback=false;const broken=new Firestore('demo',async()=>'test',async(url)=>{assert(url.endsWith(':batchGet'));return Response.json([]);});await assert.rejects(broken.transactionRead(['players/test'],async()=>{callback=true;return{writes:[],result:null};}),/transaction unavailable/);assert.equal(callback,false);
 });
+test('quota failure is explicit, shared across request adapters, and never retries database writes',async()=>{
+ let calls=0;const fetcher=async()=>{calls++;return Response.json({error:{status:'RESOURCE_EXHAUSTED'}},{status:429});};const a=new Firestore('quota-test',async()=>'fake',fetcher),b=new Firestore('quota-test',async()=>'fake',fetcher);
+ await assert.rejects(a.get('players/p'),e=>e.status===429&&e.code==='RESOURCE_EXHAUSTED'&&e.retryAfter===300);
+ await assert.rejects(b.get('players/p'),e=>e.status===429&&e.retryAfter>0);assert.equal(calls,1);
+});
+test('membership summaries skip unchanged readiness but retain removal and session-status transitions',()=>{
+ const db=new Firestore('demo',async()=>'fake'),store=new GameStore(db,()=>{});let r=R.create({id:'membership_check',code:'ABCDEFGH',uid:'owner',playerId:'p',name:'Owner',mode:4},1);
+ r=R.command(r,'guest',{type:'join',playerId:'pg',name:'Guest'},2,n=>n-1);r=R.command(r,'guest',{type:'claimSeat',seat:2},3,n=>n-1);
+ const ready=R.command(r,'guest',{type:'ready'},4,n=>n-1),writes=store.projection(r,ready),path=db.name('onlineMemberships/guest/rooms/'+r.id);assert(!writes.some(w=>w.update?.name===path));assert(writes.some(w=>w.update?.name===db.name('onlineRooms/'+r.id)),'public readiness remains live');
+ const removed=R.command(r,'owner',{type:'remove',target:'guest'},5,n=>n-1);assert.equal(store.projection(r,removed).find(w=>w.update?.name===path).update.fields.status.stringValue,'Removed');
+ const stopped=R.command(r,'owner',{type:'stop'},6,n=>n-1);assert.equal(store.projection(r,stopped).find(w=>w.update?.name===path).update.fields.status.stringValue,'stopped');
+});

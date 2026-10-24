@@ -16,7 +16,8 @@ let user = null, admin = false, room = null, own = { cards: [] }, profiles = [],
 let pendingSince = 0;
 const speedRows = [], speedSnapshots = /* @__PURE__ */ new Map(), speedPending = /* @__PURE__ */ new Set();
 let uncertainCommand = null;
-let recoveryTimer = null, recoveryAttempts = 0;
+let recoveryTimer = null, recoveryAttempts = 0, pendingRetryAt = 0;
+let databaseRetryAt = 0;
 function pendingKey(id = room == null ? void 0 : room.id) {
   return "kaliPending:" + uid() + ":" + id;
 }
@@ -49,7 +50,7 @@ function recoverPending() {
     recoveryAttempts++;
     await submitMove(body);
     recoverPending();
-  }, Math.min(8e3, 1e3 * 2 ** recoveryAttempts));
+  }, Math.max(0, pendingRetryAt - Date.now(), Math.min(8e3, 1e3 * 2 ** recoveryAttempts)));
 }
 const localActions = /* @__PURE__ */ new Set(["scores", "history", "close-panel", "diagnostics", "sound", "motion", "manage"]);
 const mutationBlocked = () => busy || !!uncertainCommand;
@@ -327,6 +328,9 @@ async function api(body, endpoint = "kaliApi") {
     }
     if (!res.ok) {
       const e = Error(value.error || "Action failed");
+      const retrySeconds = Number(res.headers.get("Retry-After"));
+      if (Number.isFinite(retrySeconds) && retrySeconds > 0) e.retryAt = Date.now() + Math.min(300, retrySeconds) * 1e3;
+      if (value.code === "RESOURCE_EXHAUSTED") databaseRetryAt = e.retryAt || Date.now() + 3e5;
       e.retryable = res.status === 401 || res.status === 429 || res.status >= 500 || /^Server connection/.test(value.error || "");
       throw e;
     }
@@ -367,9 +371,11 @@ async function submitMove(body) {
     if (current()) {
       uncertainCommand = null;
       recoveryAttempts = 0;
+      pendingRetryAt = 0;
     }
     return true;
   } catch (e) {
+    pendingRetryAt = e.retryAt || 0;
     if (!e.retryable) forgetPending(body);
     if (current()) uncertainCommand = e.retryable ? body : null;
     if (!e.retryable && ((_a = body.action) == null ? void 0 : _a.type) === "play" && submittedCardTurn === JSON.stringify([owner, body.roomId, body.handId, body.turnGeneration])) submittedCardTurn = null;
@@ -475,7 +481,7 @@ async function reconnectSeat() {
   }
 }
 function header() {
-  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine ? "" : "offline"}">${!navigator.onLine ? "\u25CF RECONNECTING" : room && !seatConnected() ? "\u25CB RECONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(soundEnabled ? "Sound on" : "Sound off", "sound", false, "quiet")}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
+  return `<header><a href="../index.html" class="brand">\u2660 <span>3 PATTI <b>PRO</b></span></a><span class="connection ${navigator.onLine && databaseRetryAt <= Date.now() ? "" : "offline"}">${databaseRetryAt > Date.now() ? "\u25CF DATABASE LIMIT" : !navigator.onLine ? "\u25CF RECONNECTING" : room && !seatConnected() ? "\u25CB RECONNECTING" : "\u25CF ONLINE"}</span>${room ? btn("Rooms", "home", false, "quiet") : ""}${btn(soundEnabled ? "Sound on" : "Sound off", "sound", false, "quiet")}${btn(reduced ? "Motion off" : "Motion on", "motion", false, "quiet")}</header>`;
 }
 function home() {
   const activeRooms = memberships.filter((r) => !["stopped", "Removed"].includes(r.status));
@@ -795,6 +801,7 @@ function render() {
 }
 function renderNow() {
   var _a, _b, _c, _d;
+  syncHistory();
   if (!canPlayCards()) resetCardTaps();
   if (renderFrame !== null) cancelAnimationFrame(renderFrame);
   renderFrame = null;
@@ -898,7 +905,7 @@ function tick() {
 }
 setInterval(tick, 250);
 async function attachPresence(id) {
-  const owner = uid(), ctx = { active: true, transport: false, epoch: 0, pending: false, ref: null, retry: null, failures: 0, access: false, attempt: null };
+  const owner = uid(), ctx = { active: true, transport: false, epoch: 0, pending: false, ref: null, retry: null, failures: 0, nextAttempt: 0, access: false, attempt: null };
   const valid = (epoch) => ctx.active && subscribedRoomId === id && uid() === owner && ctx.epoch === epoch;
   const connected = presence.ref(".info/connected"), ownConnections = presence.ref("onlinePresence/" + id + "/" + owner + "/connections");
   let onOwn = null;
@@ -911,13 +918,21 @@ async function attachPresence(id) {
   }
   function retry() {
     if (!ctx.active || ctx.retry || !ctx.transport && ctx.access) return;
+    ctx.nextAttempt = Math.max(ctx.nextAttempt, Date.now() + Math.min(6e4, 1e3 * 2 ** Math.min(ctx.failures++, 6)));
     ctx.retry = setTimeout(() => {
       ctx.retry = null;
       repair();
-    }, Math.min(1e4, 1e3 * 2 ** Math.min(ctx.failures++, 4)));
+    }, Math.max(0, ctx.nextAttempt - Date.now()));
   }
-  async function repair() {
+  async function repair(force = false) {
     var _a;
+    if (force) {
+      clearTimeout(ctx.retry);
+      ctx.retry = null;
+      ctx.nextAttempt = 0;
+      ctx.failures = 0;
+    }
+    if (Date.now() < ctx.nextAttempt) return;
     if (!ctx.active || ctx.pending || !navigator.onLine || ctx.access && !ctx.transport) return;
     if (connectionReady && ctx.ref && ((_a = room == null ? void 0 : room.members[owner]) == null ? void 0 : _a.connected) === true) {
       recoverPending();
@@ -955,6 +970,7 @@ async function attachPresence(id) {
       connection = ref;
       connectionReady = true;
       ctx.failures = 0;
+      ctx.nextAttempt = 0;
       if (ctx.retry) {
         clearTimeout(ctx.retry);
         ctx.retry = null;
@@ -996,7 +1012,7 @@ async function attachPresence(id) {
       }
       connectionReady = false;
       render();
-    } else repair();
+    } else repair(true);
   });
   const watchdog = setInterval(() => {
     if (!document.hidden) {
@@ -1088,6 +1104,31 @@ function receiveRoomSnapshot(next) {
   recoverPending();
   render();
 }
+let historyUnsub = null, historyOwner = null, historyEpoch = 0;
+function stopHistory() {
+  historyEpoch++;
+  historyUnsub == null ? void 0 : historyUnsub();
+  historyUnsub = null;
+  historyOwner = null;
+}
+function syncHistory() {
+  const key = historyOpen && room ? uid() + ":" + room.id : null;
+  if (key === historyOwner) return;
+  stopHistory();
+  if (!key) return;
+  const id = room.id, epoch = historyEpoch;
+  historyOwner = key;
+  historyUnsub = db.collection("onlineRooms/" + id + "/hands").orderBy("handNumber", "desc").limit(25).onSnapshot((s) => {
+    if (epoch !== historyEpoch || (room == null ? void 0 : room.id) !== id) return;
+    const combined = new Map(records.map((r) => [r.handId, r]));
+    for (const d of s.docs) combined.set(d.id, d.data());
+    records = [...combined.values()].sort((a, b) => b.handNumber - a.handNumber);
+    historyMore = s.size === 25;
+    render();
+  }, (e) => {
+    if (epoch === historyEpoch) notice("Hand history unavailable. " + e.message);
+  });
+}
 async function enter(id) {
   clearCollection();
   connectionReady = false;
@@ -1127,14 +1168,7 @@ async function enter(id) {
     own = s.exists ? s.data() : { cards: [] };
     render();
   }, (e) => roomReadError(id, e)));
-  unsubs.push(db.collection("onlineRooms/" + id + "/hands").orderBy("handNumber", "desc").limit(25).onSnapshot((s) => {
-    if (subscribedRoomId !== id) return;
-    const combined = new Map(records.map((r) => [r.handId, r]));
-    for (const d of s.docs) combined.set(d.id, d.data());
-    records = [...combined.values()].sort((a, b) => b.handNumber - a.handNumber);
-    if (s.size < 25) historyMore = false;
-    if (historyOpen) render();
-  }));
+  unsubs.push(stopHistory);
   await attachPresence(id);
   localStorage.setItem("kaliRoom", id);
 }
@@ -1364,6 +1398,9 @@ async function loadProfiles() {
   profiles = (await db.collection("players").get()).docs.map((d) => ({ id: d.id, ...d.data() })).sort((a, b) => String(a.name).localeCompare(String(b.name)));
   render();
 }
+function activeMembershipQuery(owner) {
+  return db.collection("onlineMemberships/" + owner + "/rooms").where("status", "in", ["lobby", "playing", "between"]);
+}
 let membershipUnsub = null;
 auth.onAuthStateChanged(async (current) => {
   if (user && user.uid !== (current == null ? void 0 : current.uid)) {
@@ -1395,7 +1432,7 @@ auth.onAuthStateChanged(async (current) => {
       const token = await user.getIdTokenResult();
       const role = await db.doc("admins/" + user.uid).get();
       admin = token.claims.admin === true || role.exists;
-      membershipUnsub = db.collection("onlineMemberships/" + user.uid + "/rooms").onSnapshot((s) => {
+      membershipUnsub = activeMembershipQuery(user.uid).onSnapshot((s) => {
         memberships = s.docs.map((d) => d.data());
         if (!room) render();
       });
@@ -1409,7 +1446,7 @@ auth.onAuthStateChanged(async (current) => {
 });
 window.kaliReconnect = () => {
   recoveryAttempts = 0;
-  presenceRecovery == null ? void 0 : presenceRecovery();
+  presenceRecovery == null ? void 0 : presenceRecovery(true);
   recoverPending();
   render();
 };
