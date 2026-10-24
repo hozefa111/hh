@@ -21,7 +21,9 @@
     "test:performance": "node online/test/performance.browser.cjs",
     "test:bots": "node --test online/test/bot-intelligence.test.cjs online/test/engine.test.cjs",
     "test:bot-comparison": "node online/test/bot-comparison.cjs",
-    "test:lobby-scroll": "node online/test/lobby-scroll.browser.cjs"
+    "test:lobby-scroll": "node online/test/lobby-scroll.browser.cjs",
+    "test:card-double-tap": "node online/test/card-double-tap.browser.cjs",
+    "test:card-playback": "node online/test/card-playback.browser.cjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.3",

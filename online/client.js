@@ -14,8 +14,41 @@ let pendingSince=0;
 // Memory-only, bounded and deliberately payload-free diagnostics.
 const speedRows=[],speedSnapshots=new Map(),speedPending=new Set();
 let uncertainCommand=null;
+// Pending own commands survive WebView reloads in this tab. Never infer success
+// from a revision: retry the original envelope against the server receipt.
+let recoveryTimer=null,recoveryAttempts=0;
+function pendingKey(id=room?.id){return 'kaliPending:'+uid()+':'+id;}
+function savePending(body){try{sessionStorage.setItem(pendingKey(body.roomId),JSON.stringify(body));}catch{}}
+function forgetPending(body){try{sessionStorage.removeItem(pendingKey(body.roomId));}catch{}}
+function restorePending(id){try{const b=JSON.parse(sessionStorage.getItem(pendingKey(id))||'null');return b?.roomId===id&&b.commandId&&b.action?b:null;}catch{return null;}}
+function recoverPending(){
+ if(recoveryTimer||busy||!uncertainCommand||!seatConnected()||document.hidden||recoveryAttempts>=3)return;
+ const body=uncertainCommand,owner=uid();recoveryTimer=setTimeout(async()=>{recoveryTimer=null;if(uid()!==owner||uncertainCommand!==body||busy||!seatConnected())return;recoveryAttempts++;await submitMove(body);recoverPending();},Math.min(8000,1000*2**recoveryAttempts));
+}
 const localActions=new Set(['scores','history','close-panel','diagnostics','sound','motion','manage']);
 const mutationBlocked=()=>busy||!!uncertainCommand;
+// Pointer-qualified clicks keep keyboard/assistive activation as select + Confirm.
+// Two taps within 320ms; a drag, scroll, long press or cancelled pointer breaks
+// the gesture. Passive handlers and existing touch-action:manipulation allow pan.
+let cardPointer=null,completedCardTap=null,lastCardTap=null,submittedCardTurn=null;
+const cardTurnKey=()=>JSON.stringify([uid(),room?.id,room?.hand?.id,room?.hand?.turnGeneration]);
+function resetCardTaps(){cardPointer=null;completedCardTap=null;lastCardTap=null;}
+function canPlayCards(){const h=room?.hand;return !!(h&&R.active(room)&&h.phase==='playing'&&h.turn===uid()&&!room.paused&&seatConnected()&&!mutationBlocked()&&(performance.now()>=collectionUntil||playbackForRoom()?.stage==='collect')&&own.handId===h.id&&own.cards.length===h.counts[uid()]&&submittedCardTurn!==cardTurnKey());}
+function playableCard(c){return canPlayCards()&&own.cards.includes(c)&&R.legal(own.cards,room.hand.trick).includes(c);}
+// Keep the turn locked after acknowledgement until a newer table state arrives.
+// An uncertain request can only be retried through its existing command ID.
+async function playSelectedCard(){const c=selected;if(!playableCard(c))return;const key=cardTurnKey();submittedCardTurn=key;resetCardTaps();selected=null;const ok=await command({type:'play',card:c});if(!ok&&!uncertainCommand&&submittedCardTurn===key){submittedCardTurn=null;render();}}
+root.addEventListener('pointerdown',e=>{
+ const card=e.target.closest('.hand-card');completedCardTap=null;
+ if(!card||card.disabled||!e.isPrimary||e.button!==0){resetCardTaps();return;}
+ cardPointer={id:e.pointerId,card:card.dataset.action,key:cardTurnKey(),x:e.clientX,y:e.clientY,at:performance.now()};
+},{passive:true});
+root.addEventListener('pointermove',e=>{if(cardPointer?.id===e.pointerId&&Math.hypot(e.clientX-cardPointer.x,e.clientY-cardPointer.y)>10)resetCardTaps();},{passive:true});
+root.addEventListener('pointerup',e=>{const p=cardPointer;cardPointer=null;if(p?.id===e.pointerId&&e.target.closest('.hand-card')?.dataset.action===p.card&&performance.now()-p.at<=500&&Math.hypot(e.clientX-p.x,e.clientY-p.y)<=10)completedCardTap={...p,at:performance.now()};else resetCardTaps();},{passive:true});
+root.addEventListener('pointercancel',resetCardTaps,{passive:true});
+document.addEventListener('scroll',resetCardTaps,{passive:true,capture:true});
+window.addEventListener('blur',resetCardTaps);
+document.addEventListener('visibilitychange',resetCardTaps);
 function speedSample(operation){const row={operation:['bid','play','trump','partners','ready','pause','resume','join','create','clock','presenceSync','presenceAccess','exchange'].includes(operation)?operation:'other',mode:room?.mode||null,status:0,stages:{},started:performance.now()};speedRows.push(row);if(speedRows.length>200){const old=speedRows.shift();speedPending.delete(old);}return row;}
 function speedReport(){const metrics={};for(const key of ['request','clientToken','queue','auth','read','begin','commit','presence','total','snapshot','frame','visible']){const values=speedRows.map(r=>r.stages[key]).filter(Number.isFinite).sort((a,b)=>a-b);if(values.length)metrics[key]={samples:values.length,medianMs:Math.round(values[Math.floor((values.length-1)*.5)]),p95Ms:Math.round(values[Math.ceil(values.length*.95)-1])};}return {version:1,scope:'Local session only; timings in milliseconds. Frame means a next-frame opportunity, not physical-display FPS.',metrics,samples:speedRows.map(({operation,mode,status,stages,error,background})=>({operation,mode,status,stages:{...stages},...(error?{error}:{}),...(background?{background:true}:{})}))};}
 function speedSnapshot(id,revision){if(!Number.isFinite(revision))return;speedSnapshots.set(id+':'+revision,performance.now());if(speedSnapshots.size>64)speedSnapshots.delete(speedSnapshots.keys().next().value);}
@@ -24,6 +57,8 @@ function speedFrame(){if(document.hidden){for(const row of speedPending)row.back
 async function showSpeed(){const report=speedReport(),labels={request:'Request round trip',clientToken:'Device token',queue:'Room queue',auth:'Server identity',read:'Database reads',begin:'Transaction start',commit:'Database commit',presence:'Presence lookup',total:'Server total',snapshot:'Move to snapshot',frame:'Snapshot to next frame',visible:'Move to next frame'};const text=Object.entries(report.metrics).map(([k,v])=>`${labels[k]}: median ${v.medianMs} ms · p95 ${v.p95Ms} ms (${v.samples})`).join('\n');const choice=await gameDialog({title:'Connection & performance',message:(text||'No timing samples yet. Play a few turns, then check again.')+'\n\nLast 200 requests, on this device only. No names, cards or login tokens. Snapshot timings are available for moves; server stages require the updated free backend.',choices:[{value:'copy',label:'Copy report'},{value:'cancel',label:'Close'}]});if(choice==='copy'){const value=JSON.stringify(speedReport(),null,2);try{if(!navigator.clipboard?.writeText)throw Error();await navigator.clipboard.writeText(value);notice('Performance report copied');}catch{await gameDialog({title:'Copy performance report',message:'Select and copy this local timing report.',input:{label:'Report JSON',value,readOnly:true,maxLength:200000},choices:[{value:'cancel',label:'Close'}]});}}}
 
 let renderFrame=null,motionQueue=[],collectionUntil=0,collectionTimer=null,pendingCollection=null;
+let tablePlayback=null;
+const CARD_READ_MS=1500,TRICK_READ_MS=1000;
 let reduced=localStorage.getItem('kaliReducedMotion')==='true'||matchMedia('(prefers-reduced-motion: reduce)').matches;
 // Sounds are synthesized locally: no downloads, microphone access or autoplay.
 let soundEnabled=localStorage.getItem('kaliSound')==='true',audioContext=null,lastSoundTurn='',lastWarning='';
@@ -58,16 +93,18 @@ async function api(body,endpoint='kaliApi'){
  const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),25000),row=speedSample(body.action?.type||body.operation||endpoint);let received=false;
  try{
  const headers={'Content-Type':'application/json'};if(user){const start=performance.now(),aborted=new Promise((_,reject)=>controller.signal.addEventListener('abort',()=>reject(new Error('Connection timed out.')),{once:true}));try{headers.Authorization='Bearer '+await Promise.race([user.getIdToken(),aborted]);}finally{row.stages.clientToken=performance.now()-start;}}
- const res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});received=true;row.status=res.status;
+ let res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});received=true;
+ if(res.status===401&&user){headers.Authorization='Bearer '+await user.getIdToken(true);res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});}
+ row.status=res.status;
  const timingPattern=/([a-zA-Z]+);dur=([0-9.]+)/g;let match;while((match=timingPattern.exec(res.headers.get('Server-Timing')||''))!==null)if(['queue','auth','read','begin','commit','presence','total'].includes(match[1]))row.stages[match[1]]=Number(match[2]);
  let value;try{value=await res.json();}catch{const e=Error('Game server unavailable. Check deployment and connection.');e.retryable=true;throw e;}
- if(!res.ok){const e=Error(value.error||'Action failed');e.retryable=res.status>=500||/^Server connection/.test(value.error||'');throw e;}
+ if(!res.ok){const e=Error(value.error||'Action failed');e.retryable=res.status===401||res.status===429||res.status>=500||/^Server connection/.test(value.error||'');throw e;}
  if(value.serverNow)clockAnchor={server:value.serverNow,mono:performance.now()};if(body.roomId&&body.action)speedWatch(row,body.roomId,value.revision);return value;
  }catch(e){row.error=controller.signal.aborted?'timeout':received?'rejected':'network';if(controller.signal.aborted){const error=Error('Connection timed out. Your table state is preserved; reconnect and retry.');error.retryable=true;throw error;}if(!received)e.retryable=true;throw e;}finally{clearTimeout(timeout);row.stages.request=performance.now()-row.started;}
 }
 
 function disableControls(){renderedMarkup=null;root.querySelectorAll('button').forEach(b=>{if(!localActions.has(b.dataset.action)&&!(b.dataset.action==='retry-move'&&!busy))b.disabled=true;});}
-async function submitMove(body){const owner=uid(),current=()=>room?.id===body.roomId&&uid()===owner;busy=true;pendingSince=performance.now();disableControls();render();try{await api(body);if(current())uncertainCommand=null;return true;}catch(e){if(current())uncertainCommand=e.retryable?body:null;notice(e.message);return false;}finally{busy=false;pendingSince=0;render();}}
+async function submitMove(body){const owner=uid(),current=()=>room?.id===body.roomId&&uid()===owner;busy=true;savePending(body);pendingSince=performance.now();disableControls();render();try{await api(body);forgetPending(body);if(current()){uncertainCommand=null;recoveryAttempts=0;}return true;}catch(e){if(!e.retryable)forgetPending(body);if(current())uncertainCommand=e.retryable?body:null;if(!e.retryable&&body.action?.type==='play'&&submittedCardTurn===JSON.stringify([owner,body.roomId,body.handId,body.turnGeneration]))submittedCardTurn=null;notice(e.message);return false;}finally{busy=false;pendingSince=0;render();recoverPending();}}
 async function command(action){if(!room||busy)return;if(uncertainCommand){notice('Confirm your pending move before choosing another action.');return false;}if(!navigator.onLine){notice('Offline. Reconnect to continue.');return false;}return submitMove({roomId:room.id,revision:room.revision,handId:room.hand?.id,turnGeneration:room.hand?.turnGeneration,commandId:crypto.randomUUID(),action});}
 
 function seatConnected(){const me=room?.members[uid()];return !!(navigator.onLine&&connectionReady&&me?.connected===true&&me.status!=='Disconnected');}
@@ -75,13 +112,14 @@ function recoveryPanel(){if(room&&uncertainCommand?.roomId===room.id)return `<se
 function missingPlayers(){return R.active(room)?room.hand.seatMap.filter(p=>p.kind!=='bot'&&!room.members[p.uid].connected):[];}
 function pauseControl(){return room.admin===uid()&&room.status!=='stopped'?btn(room.paused?'Resume':'Pause',room.paused?'resume':'pause',room.paused&&missingPlayers().length>0):'';}
 function pauseBanner(){if(!room.paused)return '';const missing=missingPlayers(),owner=room.admin===uid();return `<section class="pause-banner"><h2>Ⅱ Game paused</h2><p>${missing.length?'Waiting for '+missing.map(p=>esc(name(p.uid))).join(', ')+'. Their seats, cards and remaining time are preserved.':'Admin paused the table. Cards and remaining time are preserved.'}</p><div class="pause-actions">${owner?btn('Resume game','resume',missing.length>0)+(R.active(room)?btn('Void hand & replace player','void-replace',false,'danger'):''):'<p>Reconnect to your existing seat. The admin resumes when everyone is connected.</p>'}</div>${owner&&missing.length?'<p class="muted">Wait for reconnection, or void this unfinished hand before choosing a replacement. Completed scores stay saved.</p>':''}</section>`;}
-function leaveRoomView(){uncertainCommand=null;window.kaliDismissDialog();clearCollection();subscribedRoomId=null;room=null;own={cards:[]};previous=null;selected=null;loadingRoom=false;error='';screen='home';unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}connectionReady=false;render();}
+function leaveRoomView(){uncertainCommand=null;clearTimeout(recoveryTimer);recoveryTimer=null;window.kaliDismissDialog();clearCollection();subscribedRoomId=null;room=null;own={cards:[]};previous=null;selected=null;loadingRoom=false;error='';screen='home';unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}connectionReady=false;render();}
 
 async function reconnectSeat(){
  if(!room||!user||reconnectBusy)return;if(!navigator.onLine){notice('Offline. Turn on your internet, then tap Reconnect.');return;}
  const id=room.id;reconnectBusy=true;render();
  try{
-  if(seatConnected()){const reply=await api({operation:'presenceSync',roomId:id});if(reply.connected){notice('Your seat is connected.');return;}}
+  await user.getIdToken(true);recoveryAttempts=0;
+  if(seatConnected()){const reply=await api({operation:'presenceSync',roomId:id});if(reply.connected){recoverPending();notice('Your seat is connected.');return;}}
   notice('Reconnecting to your existing seat…');presence.goOffline();presence.goOnline();await enter(id);
   const until=Date.now()+15000;while(subscribedRoomId===id&&!seatConnected()&&Date.now()<until)await new Promise(resolve=>setTimeout(resolve,100));
   if(subscribedRoomId!==id)return;notice(seatConnected()?'Connected · your seat and cards are restored.':'Still reconnecting. Check your internet; your game state is preserved.');
@@ -93,7 +131,7 @@ function liveRoom(){
  const owner=room.admin===uid(),panel=scoreOpen?'scores':historyOpen?'history':screen==='manage'?'manage':null;
  return `<section class="room-head live"><h1 title="${esc(room.sessionName)}">${esc(room.sessionName||room.code)}</h1><div class="room-actions">${btn('↗','share',false,'gold')}${pauseControl()}${owner?btn('Stop Session','stop',false,'danger'):''}</div></section>${table()}<nav class="toolbar live-tools" aria-label="Table options">${btn('Scores','scores')}${btn('History','history')}${owner?btn('Manage','manage'):btn('Leave','leave')}</nav>${panel?`<section class="table-drawer" role="dialog" aria-modal="true" aria-label="${panel==='scores'?'Session scores':panel==='history'?'Hand history':'Manage table'}"><div class="drawer-top"><strong>${panel==='scores'?'Session scores':panel==='history'?'Hand history':'Manage table'}</strong>${btn('Close','close-panel')}</div><div class="drawer-body">${panel==='scores'?btn('↻ Reconnect','reconnect',reconnectBusy)+btn('Check speed','diagnostics')+scoreboard():panel==='history'?history():btn('Rename session','rename-session')+management()}</div></section>`:''}${pauseBanner()}`;
 }
-function lobby(){if(R.active(room))return liveRoom();const me=room.members[uid()],isOwner=room.admin===uid(),seated=R.ordered(room),hasHand=R.active(room);return `<section class="room-head ${hasHand?'live':''}"><div><span class="eyebrow">${room.mode} PLAYERS · 250 POINTS</span><h1>${esc(room.sessionName||'Table '+room.code)}</h1><p class="room-code">Room ${esc(room.code)}</p><p>Clockwise seats · ${room.status==='stopped'?'Session complete':'Session stays open until admin stops it'}</p></div><div class="room-actions">${btn('↗ Invite','share',false,'gold')}${isOwner&&room.status!=='stopped'?btn('Stop Session','stop',false,'danger'):''}</div></section>${hasHand?table():`<div class="lobby-seats">${Array.from({length:room.mode},(_,i)=>{const p=seated.find(p=>p.seat===i+1);return `<article data-seat="${i+1}" class="seat-card ${p?.uid===uid()?'self':''}"><span class="seat-number">SEAT ${i+1}</span><div class="avatar">${p?.kind==='bot'?'♟':esc((p?.name||'?').slice(0,1).toUpperCase())}</div><h3>${esc(p?.name||'Empty seat')}</h3><span class="badge">${p?(p.kind==='bot'?'COMPUTER':'HUMAN'):'OPEN'}</span><p>${p?status(p):'Ready for a player'}</p>${!p&&room.status!=='stopped'?`${me?.approved?btn('Take seat '+(i+1),'claim-seat:'+(i+1),busy,'gold'):''}${isOwner?btn('+ Computer','bot:'+(i+1)):''}`:''}</article>`;}).join('')}</div>`}${room.lastResult&&!hasHand?results():''}${room.status==='stopped'?`<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>`:''}<div class="toolbar">${room.status!=='stopped'?btn('↻ Reconnect','reconnect',reconnectBusy)+pauseControl():''}${btn('Session scores','scores')}${btn('Hand history','history')}${isOwner?btn('Manage table','manage')+btn('Rename session','rename-session'):btn('Leave room','leave',room.status==='stopped')}</div>${scoreOpen?`<section class="panel"><h2>Current session · starts from zero</h2>${btn('Check speed','diagnostics')}${scoreboard()}</section>`:''}${historyOpen?history():''}${isOwner&&screen==='manage'?management():''}${pauseBanner()}`;}
+function lobby(){if(liveTable())return liveRoom();const me=room.members[uid()],isOwner=room.admin===uid(),seated=R.ordered(room),hasHand=R.active(room);return `<section class="room-head ${hasHand?'live':''}"><div><span class="eyebrow">${room.mode} PLAYERS · 250 POINTS</span><h1>${esc(room.sessionName||'Table '+room.code)}</h1><p class="room-code">Room ${esc(room.code)}</p><p>Clockwise seats · ${room.status==='stopped'?'Session complete':'Session stays open until admin stops it'}</p></div><div class="room-actions">${btn('↗ Invite','share',false,'gold')}${isOwner&&room.status!=='stopped'?btn('Stop Session','stop',false,'danger'):''}</div></section>${hasHand?table():`<div class="lobby-seats">${Array.from({length:room.mode},(_,i)=>{const p=seated.find(p=>p.seat===i+1);return `<article data-seat="${i+1}" class="seat-card ${p?.uid===uid()?'self':''}"><span class="seat-number">SEAT ${i+1}</span><div class="avatar">${p?.kind==='bot'?'♟':esc((p?.name||'?').slice(0,1).toUpperCase())}</div><h3>${esc(p?.name||'Empty seat')}</h3><span class="badge">${p?(p.kind==='bot'?'COMPUTER':'HUMAN'):'OPEN'}</span><p>${p?status(p):'Ready for a player'}</p>${!p&&room.status!=='stopped'?`${me?.approved?btn('Take seat '+(i+1),'claim-seat:'+(i+1),busy,'gold'):''}${isOwner?btn('+ Computer','bot:'+(i+1)):''}`:''}</article>`;}).join('')}</div>`}${room.lastResult&&!hasHand?results():''}${room.status==='stopped'?`<section class="panel"><h2>Final session scorecard</h2>${scoreboard()}<p>Completed hands are saved in 3 Patti PRO history.</p></section>`:''}<div class="toolbar">${room.status!=='stopped'?btn('↻ Reconnect','reconnect',reconnectBusy)+pauseControl():''}${btn('Session scores','scores')}${btn('Hand history','history')}${isOwner?btn('Manage table','manage')+btn('Rename session','rename-session'):btn('Leave room','leave',room.status==='stopped')}</div>${scoreOpen?`<section class="panel"><h2>Current session · starts from zero</h2>${btn('Check speed','diagnostics')}${scoreboard()}</section>`:''}${historyOpen?history():''}${isOwner&&screen==='manage'?management():''}${pauseBanner()}`;}
 function lobbyReady(){
  const me=room.members[uid()],isOwner=room.admin===uid(),seated=R.ordered(room);
  return `<section class="ready-bar lobby-ready" aria-label="Lobby readiness"><p>${room.paused?'Session paused · Admin must Resume before Ready.':R.allReadyExceptAdmin(room)?'Waiting for Admin to start next hand.':'Review your result, then mark Ready.'}</p>${me?.seat!==null&&me?.approved?btn(isOwner?(room.startedAt?'READY · Deal next hand':'READY · Start session'):me.ready?'✓ Ready':'I am READY','ready',room.paused||!seatConnected()||(isOwner?!R.allReadyExceptAdmin(room):me.ready),'gold'):`<p class="muted">${seated.length===room.mode?'All seats occupied. Waiting for a seat.':'Choose an empty seat to join.'}</p>${!me?.approved&&me?.requestedPlayerId?btn('Confirm my player profile','confirm-profile',busy,'gold'):''}`}</section>`;
@@ -104,24 +142,61 @@ function measureLobbyDock(){if(!observedDock)return;const height=Math.ceil(obser
 function observeLobbyDock(){const dock=root.querySelector('.lobby-ready');if(dock!==observedDock){if(observedDock)dockObserver?.unobserve(observedDock);observedDock=dock;if(dock){dockObserver?.observe(dock);measureLobbyDock();}}}
 window.addEventListener('resize',measureLobbyDock,{passive:true});
 function status(p){return !p.connected&&p.kind!=='bot'?'○ Disconnected':p.ready?'✓ Ready':esc(p.status);}
-function table(){const h=room.hand,localCards=own.handId===h.id?own.cards:[],me=room.members[uid()],mySeat=me?.seat||1,turn=h.turn===uid(),canPlay=performance.now()>=collectionUntil&&seatConnected()&&turn&&h.phase==='playing'&&!room.paused&&!busy&&own.handId===h.id&&own.cards.length===h.counts[uid()],legal=canPlay?R.legal(localCards,h.trick):[];
- const last=h.tricks.at(-1),collecting=performance.now()<collectionUntil,trick=collecting?[]:h.trick;return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump?R.NAMES[h.trump]:'Choosing'}</b></span><span>${h.phase==='auction'?'CURRENT BID':'CONTRACT'} <b>${h.bid} · ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called?esc(h.called.slice(0,-1))+suit(h.called.slice(-1)):'—'}</b></span></section>${partnerStatus(h)}<div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} · TRICK ${Math.min(h.tricks.length+1,h.mode===4?10:7)}</small></div>${h.seatMap.map(p=>{const angle=((p.seat-mySeat+room.mode)%room.mode)*2*Math.PI/room.mode,x=50-Math.sin(angle)*40,y=50+Math.cos(angle)*39;return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn===p.uid?'current':''} ${p.uid===uid()?'self':''} ${last?.winner===p.uid?'trick-winner':''}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind==='bot'?'♟':esc(p.name.slice(0,1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} · ${p.kind==='bot'?'BOT · ':''}${h.counts[p.uid]} cards · ${h.tricks.filter(t=>t.winner===p.uid).length} tricks</small><span>${room.members[p.uid].connected?'':'○ Offline · '}${h.bidder===p.uid?'♛ Bidder':h.direct===p.uid?'Direct partner':h.revealed&&h.secret===p.uid?'✦ Called partner':''}</span></div>`;}).join('')}<div class="centre-trick" data-players="${room.mode}" data-trick="${h.tricks.length}">${trick.map(p=>`<div data-player="${esc(p.uid)}" class="played-card ${p.automatic?'automatic':''}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason==='timeout'?' · Timeout':p.reason==='bot'?' · Bot':p.automatic?' · Auto':''}</small></div>`).join('')}</div></div></div>${last?`<p class="last-trick" role="status">✓ ${esc(name(last.winner))} won trick ${h.tricks.length} · +${last.points} captured points</p>`:''}<section class="turn-bar"><span class="turn-label">${room.paused?'Paused':collecting?'Collecting trick…':turn?'Your turn':esc(name(h.turn))+'’s turn'}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">—</span></section><p class="hand-hint" aria-live="polite">${busy?'Sending your move…':'Your cards · All visible · Glowing cards are playable'}</p><section class="my-hand" aria-label="Your cards"><div class="hand-fan" style="--hand-cols:${localCards.length>8?5:localCards.length>4?4:Math.max(1,localCards.length)}">${localCards.map((c,i)=>`<button class="hand-card ${legal.includes(c)?'legal':canPlay?'dim':'waiting'} ${selected===c?'selected':''}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c)?'disabled':''} aria-label="${esc(R.card(c).rank+' '+R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join('')}</div></section><section class="phase-area">${selected&&canPlay?`<div class="play-confirm">${btn('Play '+esc(selected),'confirm-card',false,'gold')}${btn('Cancel','cancel-card')}</div>`:''}${turn&&seatConnected()&&!room.paused&&own.handId===h.id?phaseControls(h):`<p class="phase-caption">${room.paused?'Cards and time preserved':!seatConnected()?'Reconnecting to your seat…':h.phase==='auction'?'Bidding clockwise · 30s timeout = PASS':h.phase==='trump'?'Bidder is choosing Hukum':h.phase==='partners'?'Bidder is choosing partners':'Follow the glowing cards when it is your turn'}</p>`}</section><details class="panel auction"><summary>Bidding history · ${h.bid}</summary>${h.auction.map(a=>`<p>${esc(name(a.uid))} <b>${a.pass?'PASS':a.bid}</b> ${a.reason==='timeout'?'· timeout PASS':a.reason==='bot'?'· computer':a.automatic?'· automatic':''}</p>`).join('')}<p>Passed: ${h.passed.map(name).map(esc).join(', ')||'None'}</p></details>`;}
+function table(){const h=room.hand,localCards=own.handId===h.id?own.cards:[],me=room.members[uid()],mySeat=me?.seat||1,turn=h.turn===uid(),canPlay=canPlayCards(),legal=canPlay?R.legal(localCards,h.trick):[];
+ const v=playbackForRoom(),last=v?v.last:h.tricks.at(-1),collecting=performance.now()<collectionUntil,trick=v?v.cards:collecting?[]:h.trick,actor=v?.current?v.actor:null,winner=v?v.result?.winner:last?.winner,number=v?v.number:Math.min(h.tricks.length+1,h.mode===4?10:7),feedback=v?.stage==='card'?esc(name(v.cards.at(-1).uid))+' played '+esc(v.current?.play.card||v.cards.at(-1)?.card)+' · '+R.points(v.cards.at(-1).card)+' points':last?'✓ '+esc(name(last.winner))+' won trick '+last.number+' · +'+last.points+' captured points':'';return `<section class="game-meta"><span>HUKUM <b>${suit(h.trump)} ${h.trump?R.NAMES[h.trump]:'Choosing'}</b></span><span>${h.phase==='auction'?'CURRENT BID':'CONTRACT'} <b>${h.bid} · ${esc(name(h.bidder))}</b></span><span>CALLED <b>${h.called?esc(h.called.slice(0,-1))+suit(h.called.slice(-1)):'—'}</b></span></section>${partnerStatus(h)}<div class="table-wrap"><div class="felt"><div class="table-mark">3 PATTI <b>PRO</b><small>HAND ${h.number} · TRICK ${number}</small></div>${h.seatMap.map(p=>{const angle=((p.seat-mySeat+room.mode)%room.mode)*2*Math.PI/room.mode,x=50-Math.sin(angle)*40,y=50+Math.cos(angle)*39;return `<div data-player="${esc(p.uid)}" class="table-seat ${h.turn===p.uid&&!showingPlayback()?'current':''} ${p.uid===uid()?'self':''} ${winner===p.uid?'trick-winner':''} ${actor===p.uid?'just-played':''}" style="left:${x}%;top:${y}%"><div class="avatar">${p.kind==='bot'?'♟':esc(p.name.slice(0,1).toUpperCase())}</div><strong>${esc(p.name)}</strong><small>#${p.seat} · ${p.kind==='bot'?'BOT · ':''}${v?v.counts[p.uid]:h.counts[p.uid]} cards · ${v?v.wins[p.uid]:h.tricks.filter(t=>t.winner===p.uid).length} tricks</small><span>${room.members[p.uid].connected?'':'○ Offline · '}${h.bidder===p.uid?'♛ Bidder':h.direct===p.uid?'Direct partner':h.revealed&&h.secret===p.uid?'✦ Called partner':''}</span></div>`;}).join('')}<div class="centre-trick" data-players="${room.mode}" data-trick="${number-1}" data-playback="${v?.stage||'live'}">${trick.map(p=>`<div data-player="${esc(p.uid)}" data-card="${esc(p.card)}" class="played-card ${actor===p.uid?'just-played':''} ${p.automatic?'automatic':''}">${cardHTML(p.card)}<small>${esc(name(p.uid))}${p.reason==='timeout'?' · Timeout':p.reason==='bot'?' · Bot':p.automatic?' · Auto':''}</small></div>`).join('')}</div></div></div>${feedback?`<p class="last-trick" role="status">${feedback}</p>`:''}<section class="turn-bar"><span class="turn-label">${showingPlayback()&&h.phase==='playing'?'Live · ':''}${room.paused?'Paused':h.phase==='complete'?'Hand complete':turn?'Your turn':esc(name(h.turn))+'’s turn'}</span><strong>${esc(h.phase.toUpperCase())}</strong><span id="countdown" class="timer" aria-label="Turn time remaining">—</span></section><p class="hand-hint" aria-live="polite">${busy?'Sending your move…':'Your cards · All visible · Glowing cards are playable'}</p><section class="my-hand" aria-label="Your cards"><div class="hand-fan" style="--hand-cols:${localCards.length>8?5:localCards.length>4?4:Math.max(1,localCards.length)}">${localCards.map((c,i)=>`<button class="hand-card ${legal.includes(c)?'legal':canPlay?'dim':'waiting'} ${selected===c?'selected':''}" style="--i:${i};--count:${localCards.length}" data-action="card:${c}" ${!legal.includes(c)?'disabled':''} aria-label="${esc(R.card(c).rank+' '+R.NAMES[R.card(c).suit])}">${cardHTML(c)}</button>`).join('')}</div></section><section class="phase-area">${selected&&canPlay?`<div class="play-confirm">${btn('Play '+esc(selected),'confirm-card',false,'gold')}${btn('Cancel','cancel-card')}</div>`:''}${turn&&seatConnected()&&!room.paused&&own.handId===h.id?phaseControls(h):`<p class="phase-caption">${room.paused?'Cards and time preserved':!seatConnected()?'Reconnecting to your seat…':h.phase==='auction'?'Bidding clockwise · 30s timeout = PASS':h.phase==='trump'?'Bidder is choosing Hukum':h.phase==='partners'?'Bidder is choosing partners':'Follow the glowing cards when it is your turn'}</p>`}</section><details class="panel auction"><summary>Bidding history · ${h.bid}</summary>${h.auction.map(a=>`<p>${esc(name(a.uid))} <b>${a.pass?'PASS':a.bid}</b> ${a.reason==='timeout'?'· timeout PASS':a.reason==='bot'?'· computer':a.automatic?'· automatic':''}</p>`).join('')}<p>Passed: ${h.passed.map(name).map(esc).join(', ')||'None'}</p></details>`;}
 function partnerStatus(h){
  if(!h.called)return '';
  if(!h.revealed)return `<section class="partner-status secret" aria-live="polite"><b>✦ ${h.direct?'Direct partner: '+esc(name(h.direct)):'Secret partner'}</b><span>Called ${esc(h.called.slice(0,-1))}${suit(h.called.slice(-1))} · holder stays secret until this card is played</span></section>`;
  const partners=[...new Set(h.partners||[h.direct,h.secret].filter(Boolean))];
  return `<section class="partner-status revealed" aria-live="polite"><b>✦ ${h.bidder===uid()?'Your partner'+(partners.length>1?'s':''):'Hukum partners'}: ${partners.map(name).map(esc).join(' & ')}</b><span>${esc(name(h.secret))} played ${esc(h.called.slice(0,-1))}${suit(h.called.slice(-1))}${h.secret===h.direct?' · Direct and called-card partner are the same player':''}</span></section>`;
 }
-function clearCollection(){clearTimeout(collectionTimer);collectionTimer=null;pendingCollection=null;collectionUntil=0;document.querySelectorAll('.trick-flight,.trick-announcement').forEach(el=>el.remove());}
-function collectTrick(trick){
- playSound('trick');clearCollection();if(!trick||document.hidden)return;
+// Only public played cards enter this queue. First load/reconnect starts at the
+// current table; later snapshots can recover every move from completed tricks.
+function playbackForRoom(){return tablePlayback?.roomId===room?.id&&tablePlayback?.handId===room?.hand?.id?tablePlayback:null;}
+function showingPlayback(){const v=playbackForRoom();return !!(v&&(v.current||v.queue.length));}
+function liveTable(){return !!(room&&(R.active(room)||room.hand?.phase==='complete'&&showingPlayback()));}
+function resetPlayback(){if(tablePlayback){clearTimeout(tablePlayback.timer);tablePlayback.animation?.cancel();}tablePlayback=null;}
+function playbackEvents(h){return [...h.tricks.flatMap(t=>[...t.cards.map((play,index)=>({type:'card',number:t.number,index,play})),{type:'result',number:t.number,trick:t}]),...h.trick.map((play,index)=>({type:'card',number:h.tricks.length+1,index,play}))];}
+function playbackKey(event){return event.type==='result'?'result:'+event.number:JSON.stringify([event.number,event.index,event.play.uid,event.play.card]);}
+function seedPlayback(next){const h=next.hand;return {roomId:next.id,handId:h.id,seen:new Set(playbackEvents(h).map(playbackKey)),queue:[],current:null,timer:null,needsFrame:false,number:h.tricks.length+1,cards:h.trick.slice(),counts:{...h.counts},wins:Object.fromEntries(h.seatMap.map(p=>[p.uid,h.tricks.filter(t=>t.winner===p.uid).length])),last:h.tricks.at(-1),result:null,actor:null,stage:'idle'};}
+function updateTablePlayback(before,next){
+ const h=next.hand;
+ if(!h||h.phase==='void'||before?.id!==next.id||before?.hand?.id!==h.id||document.hidden){clearCollection();if(h&&h.phase!=='void')tablePlayback=seedPlayback(next);return;}
+ if(!tablePlayback||tablePlayback.roomId!==next.id||tablePlayback.handId!==h.id)tablePlayback=seedPlayback(before);
+ for(const event of playbackEvents(h)){const key=playbackKey(event);if(!tablePlayback.seen.has(key)){tablePlayback.seen.add(key);tablePlayback.queue.push(event);}}
+}
+function advancePlayback(){
+ const v=playbackForRoom();if(!v||v.current||!v.queue.length||document.hidden)return;
+ const event=v.queue.shift();v.current=event;v.needsFrame=true;
+ if(event.type==='card'){
+  if(v.number!==event.number){v.number=event.number;v.cards=[];}
+  v.result=null;v.actor=event.play.uid;v.stage='card';v.cards.push(event.play);v.counts[event.play.uid]--;
+ }else{v.result=event.trick;v.last=event.trick;v.actor=null;v.stage='result';v.wins[event.trick.winner]++;}
+}
+function playbackDelay(v,ms,done){v.timer=setTimeout(()=>{v.timer=null;if(playbackForRoom()!==v)return;done();render();},ms);}
+function animatePlayback(){
+ const v=playbackForRoom();if(!v?.needsFrame)return;v.needsFrame=false;
+ if(v.stage==='card'){
+  const event=v.current,card=root.querySelector('.centre-trick [data-player="'+CSS.escape(event.play.uid)+'"]'),seat=root.querySelector('.table-seat[data-player="'+CSS.escape(event.play.uid)+'"]');
+  if(card&&seat&&!reduced){const a=seat.getBoundingClientRect(),b=card.getBoundingClientRect();v.animation=card.animate([{transform:'translate('+(a.x+a.width/2-b.x-b.width/2)+'px,'+(a.y+a.height/2-b.y-b.height/2)+'px) scale(.6)',opacity:.2},{transform:'translate(0,0) scale(1)',opacity:1}],{duration:300,easing:'ease-out'});}
+  playSound('card');playbackDelay(v,CARD_READ_MS,()=>{v.current=null;advancePlayback();});
+ }else if(v.stage==='result'){
+  playbackDelay(v,TRICK_READ_MS,()=>{
+   v.stage='collect';v.cards=[];
+   collectTrick(v.result,()=>{if(playbackForRoom()!==v)return;v.current=null;v.stage='idle';v.number++;advancePlayback();});
+  });
+ }
+}
+function clearCollection(reset=true){clearTimeout(collectionTimer);collectionTimer=null;pendingCollection=null;collectionUntil=0;if(reset)resetPlayback();document.querySelectorAll('.trick-flight,.trick-announcement').forEach(el=>el.remove());}
+function collectTrick(trick,onCollected){
+ playSound('trick');clearCollection(false);if(!trick||document.hidden){onCollected?.();return;}
  const felt=document.querySelector('.felt'),seat=document.querySelector('.table-seat[data-player="'+CSS.escape(trick.winner)+'"]');
- if(!felt||!seat)return;
+ if(!felt||!seat){onCollected?.();return;}
  const area=felt.getBoundingClientRect(),target=seat.getBoundingClientRect(),duration=reduced?300:850;
  collectionUntil=performance.now()+duration;
  const announcement=document.createElement('div');announcement.className='trick-announcement';announcement.setAttribute('role','status');announcement.textContent=name(trick.winner)+' won the trick · +'+trick.points+' captured points';document.body.appendChild(announcement);
  pendingCollection={trick,area,target};
- collectionTimer=setTimeout(()=>{clearCollection();render();},duration);
+ collectionTimer=setTimeout(()=>{clearCollection(false);onCollected?.();render();},duration);
 }
 function animateCollection(){
  if(!pendingCollection)return;const {trick,area:oldArea,target:oldTarget}=pendingCollection;pendingCollection=null;
@@ -189,23 +264,21 @@ function patchChildren(parent,next){
 let renderedMarkup=null,renderedView=null;
 function patchGame(markup){if(markup===renderedMarkup)return;const template=document.createElement('template');template.innerHTML=markup;patchChildren(root,template.content);renderedMarkup=markup;}
 function render(){if(renderFrame===null)renderFrame=requestAnimationFrame(renderNow);}
-function renderNow(){if(renderFrame!==null)cancelAnimationFrame(renderFrame);renderFrame=null;root.dataset.revision=room?.revision??'';const view=(room?room.id+':'+(R.active(room)?'table':'lobby'):loadingRoom?'loading':'home');const newView=view!==renderedView;renderedView=view;
+function renderNow(){if(!canPlayCards())resetCardTaps();if(renderFrame!==null)cancelAnimationFrame(renderFrame);renderFrame=null;root.dataset.revision=room?.revision??'';const view=(room?room.id+':'+(liveTable()?'table':'lobby'):loadingRoom?'loading':'home');const newView=view!==renderedView;renderedView=view;
 const drafts=Array.from(root.querySelectorAll('form')).map(f=>({id:f.id,target:f.dataset.target,context:f.id==='bid'?f.dataset.hand+':'+f.dataset.generation:null,values:Array.from(f.querySelectorAll('input,select')).map(i=>({name:i.name,value:i.value}))}));
 const focus=document.activeElement,focused=focus?.name?{name:focus.name,form:focus.form?.id,start:focus.selectionStart}:null;document.body.classList.toggle('reduced',reduced);// publicState omits hand in a new lobby. toggle(token, undefined) toggles!
-const live=!!(room&&R.active(room));document.body.classList.toggle('live-game',live);const dock=!!room&&!live&&room.status!=='stopped';document.body.classList.toggle('room-lobby',dock);document.body.classList.toggle('bidding',live&&room.hand.phase==='auction');patchGame(header()+`<main class="${live?'live-main':dock?'lobby-main':''}">${error?`<p class="error">${esc(error)}</p>`:''}${room?recoveryPanel()+lobby():loadingRoom?'<section class="panel"><h2>Connecting to your table…</h2><p>Restoring seats and your private hand.</p></section>':home()}</main>${dock?lobbyReady():''}<footer>3 PATTI PRO · Same players. Same scorecard.</footer>`);for(const draft of drafts){const form=Array.from(root.querySelectorAll('form')).find(f=>f.id===draft.id&&f.dataset.target===draft.target&&(draft.context===null||draft.context===f.dataset.hand+':'+f.dataset.generation));if(!form&&draft.id==='bid'){const fresh=document.getElementById('bid');if(fresh)fresh.elements.bid.selectedIndex=0;}if(form)for(const v of draft.values){const input=Array.from(form.elements).find(i=>i.name===v.name);if(input&&(!(input instanceof HTMLSelectElement)||Array.from(input.options).some(o=>o.value===v.value)))input.value=v.value;}}
+const live=liveTable();document.body.classList.toggle('live-game',live);const dock=!!room&&!live&&room.status!=='stopped';document.body.classList.toggle('room-lobby',dock);document.body.classList.toggle('bidding',live&&room.hand.phase==='auction');patchGame(header()+`<main class="${live?'live-main':dock?'lobby-main':''}">${error?`<p class="error">${esc(error)}</p>`:''}${room?recoveryPanel()+lobby():loadingRoom?'<section class="panel"><h2>Connecting to your table…</h2><p>Restoring seats and your private hand.</p></section>':home()}</main>${dock?lobbyReady():''}<footer>3 PATTI PRO · Same players. Same scorecard.</footer>`);for(const draft of drafts){const form=Array.from(root.querySelectorAll('form')).find(f=>f.id===draft.id&&f.dataset.target===draft.target&&(draft.context===null||draft.context===f.dataset.hand+':'+f.dataset.generation));if(!form&&draft.id==='bid'){const fresh=document.getElementById('bid');if(fresh)fresh.elements.bid.selectedIndex=0;}if(form)for(const v of draft.values){const input=Array.from(form.elements).find(i=>i.name===v.name);if(input&&(!(input instanceof HTMLSelectElement)||Array.from(input.options).some(o=>o.value===v.value)))input.value=v.value;}}
 updateBidControls();
 if(focused){const f=document.getElementById(focused.form),i=f&&Array.from(f.elements).find(i=>i.name===focused.name);if(i&&document.activeElement!==i){i.focus({preventScroll:true});try{i.setSelectionRange(focused.start,focused.start);}catch{}}}
 if(window.KALI_NATIVE_PENDING||mutationBlocked())disableControls();// Browser anchoring owns scrolling during snapshots. scrollTo cancels Android
 // touch/fling; use it only for a real view transition, never a lobby refresh.
-if(newView)window.scrollTo(0,0);observeLobbyDock();tick();animateCollection();
+if(newView)window.scrollTo(0,0);observeLobbyDock();tick();animateCollection();animatePlayback();
 if(!reduced)for(const kind of motionQueue.splice(0)){
- if(kind==='card'&&performance.now()<collectionUntil){motionQueue.push('card');continue;}
  if(kind==='deal'&&!document.querySelector('.hand-card')&&room?.hand?.seatMap.some(p=>p.uid===uid())){motionQueue.push('deal');continue;}
  if(kind==='deal')document.querySelectorAll('.hand-card').forEach((c,i)=>c.animate([{opacity:.88},{opacity:1}],{duration:350,delay:i*20}));
  if(kind==='deal'){
  const felt=document.querySelector('.felt');if(felt){const centre=felt.getBoundingClientRect();document.querySelectorAll('.table-seat').forEach((seat,i)=>{const target=seat.getBoundingClientRect();for(let c=0;c<(room.mode===4?10:7);c++){const back=document.createElement('span');back.className='deal-back';back.dataset.transient='true';back.textContent='✦';felt.appendChild(back);const travel=back.animate([{transform:'translate(-50%,-50%)',opacity:.8},{transform:'translate(calc(-50% + '+(target.x+target.width/2-centre.x-centre.width/2)+'px),calc(-50% + '+(target.y+target.height/2-centre.y-centre.height/2)+'px)) scale(.6)',opacity:0}],{duration:320,delay:(c*room.mode+i)*20,fill:'both'});if(travel.finished)travel.finished.then(()=>back.remove(),()=>back.remove());else setTimeout(()=>back.remove(),350+(c*room.mode+i)*20);}});}
  }
- if(kind==='card'){const c=document.querySelector('.centre-trick .played-card:last-child');const from=c&&document.querySelector('.table-seat[data-player="'+CSS.escape(c.dataset.player)+'"]');if(c&&from){const a=from.getBoundingClientRect(),b=c.getBoundingClientRect();c.animate([{transform:'translate('+(a.x+a.width/2-b.x-b.width/2)+'px,'+(a.y+a.height/2-b.y-b.height/2)+'px) scale(.6)',opacity:.2},{transform:'translate(0,0) scale(1)',opacity:1}],{duration:300,easing:'ease-out'});}}
 
  if(kind==='trump'||kind==='reveal')document.querySelector(kind==='trump'?'.game-meta':'.partner-status')?.animate([{opacity:.2,transform:'scale(.97)'},{opacity:1,transform:'scale(1)'}],{duration:400});
 } else motionQueue=[];
@@ -221,6 +294,7 @@ async function attachPresence(id){
  function retry(){if(!ctx.active||ctx.retry||(!ctx.transport&&ctx.access))return;ctx.retry=setTimeout(()=>{ctx.retry=null;repair();},Math.min(10000,1000*2**Math.min(ctx.failures++,4)));}
  async function repair(){
   if(!ctx.active||ctx.pending||!navigator.onLine||ctx.access&&!ctx.transport)return;
+  if(connectionReady&&ctx.ref&&room?.members[owner]?.connected===true){recoverPending();return;}
   const epoch=ctx.epoch,ref=ctx.ref||ownConnections.push(),attempt=new AbortController();ctx.ref=ref;ctx.pending=true;ctx.attempt=attempt;
   const interrupted=new Promise((_,reject)=>attempt.signal.addEventListener('abort',()=>reject(Error('Presence attempt interrupted')),{once:true}));
   const timer=setTimeout(()=>attempt.abort(),15000),wait=p=>Promise.race([p,interrupted]);
@@ -232,7 +306,7 @@ async function attachPresence(id){
    await wait(ref.set(true));if(!valid(epoch))return;
    const result=await wait(api({operation:'presenceSync',roomId:id}));if(!valid(epoch))return;
    if(!result.connected)throw Error('Presence acknowledgement pending');
-   connection=ref;connectionReady=true;ctx.failures=0;if(ctx.retry){clearTimeout(ctx.retry);ctx.retry=null;}render();
+   connection=ref;connectionReady=true;ctx.failures=0;if(ctx.retry){clearTimeout(ctx.retry);ctx.retry=null;}recoverPending();render();
   }catch(e){if(valid(epoch)){if(attempt.signal.aborted){ctx.epoch++;ctx.ref=null;}connectionReady=false;render();retry();}}
   finally{
    clearTimeout(timer);if(ctx.attempt===attempt)ctx.attempt=null;ctx.pending=false;
@@ -245,8 +319,9 @@ async function attachPresence(id){
   else repair();
  });
  // A real data subscription keeps the RTDB transport active and detects lost registrations.
+ const watchdog=setInterval(()=>{if(!document.hidden){repair();recoverPending();}},15000);
  presenceRecovery=repair;repair();
- unsubs.push(()=>{ctx.active=false;ctx.epoch++;ctx.attempt?.abort();clearTimeout(ctx.retry);connected.off('value',onTransport);if(onOwn)ownConnections.off('value',onOwn);if(ctx.ref)ctx.ref.remove().catch(()=>{});if(presenceRecovery===repair)presenceRecovery=null;});
+ unsubs.push(()=>{clearInterval(watchdog);ctx.active=false;ctx.epoch++;ctx.attempt?.abort();clearTimeout(ctx.retry);connected.off('value',onTransport);if(onOwn)ownConnections.off('value',onOwn);if(ctx.ref)ctx.ref.remove().catch(()=>{});if(presenceRecovery===repair)presenceRecovery=null;});
 }
 
 function unavailableRoom(id,message){
@@ -257,16 +332,18 @@ function unavailableRoom(id,message){
  error=message||'This room is no longer available. It may have been deleted or your access changed. Choose an active room or create a new table.';render();
 }
 function roomReadError(id,e){if(e.code==='permission-denied'||e.code==='not-found')unavailableRoom(id);else{loadingRoom=false;error='Room connection interrupted. Use Reconnect to restore your seat.';render();}}
-async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;
- unsubs.push(db.doc('onlineRooms/'+id).onSnapshot(s=>{if(subscribedRoomId!==id)return;if(!s.metadata.hasPendingWrites&&!s.metadata.isFromCache&&s.exists)speedSnapshot(id,s.data().revision);if(!s.exists){unavailableRoom(id);return;}loadingRoom=false;const next=s.data();if(previous?.hand?.id!==next.hand?.id)selected=null;if(previous&&previous.id===next.id){
+function receiveRoomSnapshot(next){
+ if(previous?.id===next.id&&next.revision<previous.revision)return;
+ if(previous?.hand?.id!==next.hand?.id)selected=null;if(previous&&previous.id===next.id){
  if(previous.hand?.turnGeneration!==next.hand?.turnGeneration)selected=null;
  if(!previous.paused&&next.paused&&R.active(next)){screen='room';scoreOpen=false;historyOpen=false;}
  if(previous.hand?.id!==next.hand?.id){screen='room';scoreOpen=false;historyOpen=false;clearCollection();motionQueue.push('deal');playSound('deal');}
- else if(next.hand&&next.hand.tricks.length>previous.hand.tricks.length)collectTrick(next.hand.tricks.at(-1));
- else if(next.hand?.phase==='playing'&&Object.values(previous.hand?.counts||{}).reduce((a,b)=>a+b,0)>Object.values(next.hand.counts).reduce((a,b)=>a+b,0)){motionQueue.push('card');playSound('card');}
  if(!previous.hand?.trump&&next.hand?.trump){motionQueue.push('trump');playSound('trump');}
  if(!previous.hand?.revealed&&next.hand?.revealed){motionQueue.push('reveal');playSound('reveal');}
-}room=next;previous=next;error='';if(!seatConnected())presenceRecovery?.();render();},e=>roomReadError(id,e)));
+}updateTablePlayback(previous,next);room=next;previous=next;advancePlayback();error='';if(!seatConnected())presenceRecovery?.();recoverPending();render();
+}
+async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;uncertainCommand=restorePending(id);recoveryAttempts=0;
+ unsubs.push(db.doc('onlineRooms/'+id).onSnapshot(s=>{if(subscribedRoomId!==id)return;if(!s.metadata.hasPendingWrites&&!s.metadata.isFromCache&&s.exists)speedSnapshot(id,s.data().revision);if(!s.exists){unavailableRoom(id);return;}loadingRoom=false;receiveRoomSnapshot(s.data());},e=>roomReadError(id,e)));
  unsubs.push(db.doc('onlineRooms/'+id+'/private/'+uid()).onSnapshot(s=>{if(subscribedRoomId!==id)return;own=s.exists?s.data():{cards:[]};render();},e=>roomReadError(id,e)));
  unsubs.push(db.collection('onlineRooms/'+id+'/hands').orderBy('handNumber','desc').limit(25).onSnapshot(s=>{if(subscribedRoomId!==id)return;const combined=new Map(records.map(r=>[r.handId,r]));for(const d of s.docs)combined.set(d.id,d.data());records=[...combined.values()].sort((a,b)=>b.handNumber-a.handNumber);if(s.size<25)historyMore=false;if(historyOpen)render();}));
  await attachPresence(id);localStorage.setItem('kaliRoom',id);
@@ -309,9 +386,16 @@ root.addEventListener('click',async e=>{const target=e.target.closest('[data-act
  else if(action==='home'){leaveRoomView();}
  else if(action==='leave'){if(await command({type:'leave'}))leaveRoomView();}
  else if(action==='share'){if(location.hostname==='appassets.androidplatform.net'){location.href='https://appassets.androidplatform.net/assets/kali/share?code='+encodeURIComponent(room.code);return;}const url=new URL(location.hostname==='appassets.androidplatform.net'?KALI_PUBLIC_URL:'index.html',location.href);url.hash='join='+room.code;if(navigator.share)await navigator.share({title:'3 Patti PRO · Join my table',text:'Room '+room.code,url:url.href});else if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(url.href);notice('Invite copied');}else await gameDialog({title:'Room invitation',message:'Copy this link to invite a player.',input:{label:'Invite link',value:url.href,readOnly:true,maxLength:500},choices:[{value:'cancel',label:'Close'}]});}
- else if(action==='card'){selected=arg;render();}
- else if(action==='cancel-card'){selected=null;render();}
- else if(action==='confirm-card'){const c=selected;selected=null;await command({type:'play',card:c});}
+ else if(action==='card'){
+ const tap=completedCardTap;completedCardTap=null;
+ if(!playableCard(arg)){resetCardTaps();return;}
+ const now=performance.now(),key=cardTurnKey(),qualified=tap&&tap.card===target.dataset.action&&tap.key===key&&now-tap.at<100;
+ const double=qualified&&selected===arg&&lastCardTap?.card===arg&&lastCardTap.key===key&&now-lastCardTap.at<=320;
+ selected=arg;lastCardTap=qualified?{card:arg,key,at:now}:null;
+ if(double)await playSelectedCard();else render();
+ }
+ else if(action==='cancel-card'){resetCardTaps();selected=null;render();}
+ else if(action==='confirm-card')await playSelectedCard();
  else if(action==='pass')await command({type:'bid',pass:true});
  else if(action==='trump')await command({type:'trump',suit:arg});
  else if(action==='confirm-profile')await command({type:'join',playerId:room.members[uid()].requestedPlayerId});
@@ -338,7 +422,7 @@ if(await askConfirm('Void unfinished hand?','No points from this unfinished hand
 async function loadProfiles(){profiles=(await db.collection('players').get()).docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.name).localeCompare(String(b.name)));render();}
 let membershipUnsub=null;
 auth.onAuthStateChanged(async current=>{if(user&&user.uid!==current?.uid){uncertainCommand=null;speedRows.length=0;speedSnapshots.clear();speedPending.clear();clearCollection();unsubs.forEach(f=>f());unsubs=[];room=null;own={cards:[]};memberships=[];subscribedRoomId=null;loadingRoom=false;if(connection){connection.remove().catch(()=>{});connection=null;}presence.goOffline();presence.goOnline();}user=current;admin=false;if(membershipUnsub)membershipUnsub();try{if(user){const token=await user.getIdTokenResult();const role=await db.doc('admins/'+user.uid).get();admin=token.claims.admin===true||role.exists;membershipUnsub=db.collection('onlineMemberships/'+user.uid+'/rooms').onSnapshot(s=>{memberships=s.docs.map(d=>d.data());if(!room)render();});}await loadProfiles();if(user)await api({operation:'clock'});}catch(e){error=e.message;}render();});
-window.kaliReconnect=()=>{presenceRecovery?.();render();};
+window.kaliReconnect=()=>{recoveryAttempts=0;presenceRecovery?.();recoverPending();render();};
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearCollection();speedFrame();}else window.kaliReconnect();});
 window.addEventListener('online',window.kaliReconnect);window.addEventListener('offline',()=>{connectionReady=false;render();});
 // Native injects only an expiring one-use exchange after this document has loaded.
