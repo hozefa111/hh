@@ -74,7 +74,7 @@ test('REST receipts reject command mutation; hidden partners do not enter public
  for(let seat=3;seat<=6;seat++)await f.send('admin',{type:'bot',seat});await f.send('admin',{type:'ready'});
  while(f.rooms.get(f.roomId).hand.phase!=='playing'){
   const r=f.rooms.get(f.roomId),h=r.hand;
-  await f.send(h.turn,h.phase==='auction'?{type:'bid',pass:true}:B.decide(R.publicState(r),h.turn,R.privateState(r,h.turn).cards));
+  await f.send(h.turn,h.phase==='auction'?{type:'bid',...(h.finalBid?{keep:true}:{pass:true})}:B.decide(R.publicState(r),h.turn,R.privateState(r,h.turn).cards));
  }
  const pub=f.memory.get('onlineRooms/'+f.roomId);assert.equal(pub.hand.secret,null);assert.equal(pub.hand.partners,null);assert(!('hands'in pub.hand));
  const own=f.memory.get('onlineRooms/'+f.roomId+'/private/admin');assert.equal(own.cards.length,7);

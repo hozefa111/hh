@@ -30,7 +30,7 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
   if(h.phase==='auction'){
    await current.page.locator('#bid').waitFor();
    if(h.auction.length===1){await current.page.locator('#bid select').selectOption('180');A.equal(await current.page.locator('#bid button.gold').textContent(),'Bid 180');await current.page.screenshot({path:artifacts+'/bid-180-mobile.png',fullPage:true});report.screens.push('bid-180-mobile.png');await current.page.locator('#bid button.gold').click();}
-   else await current.page.locator('[data-action=pass]').click();
+   else await current.page.locator(h.finalBid?'[data-action=bid-keep]':'[data-action=pass]').click();
    await waitFor(async()=>((await db.doc('onlineState/'+roomId).get()).data()).revision>r.revision,'bid/pass committed through UI');
   }
   else if(h.phase==='trump'){await current.page.locator('[data-action="trump:H"]').click();await waitFor(async()=>((await db.doc('onlineState/'+roomId).get()).data()).hand.phase==='partners','Hukum chosen through UI');}
@@ -79,13 +79,12 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
   await challenger.evaluate(()=>{const button=document.querySelector('#bid button.gold');button.click();button.click();});
   await waitFor(async()=>((await db.doc('onlineState/'+maxRoom.roomId).get()).data()).hand.bid===250,'direct 250 committed');challenger.off('request',onRequest);A.equal(bidRequests,1);
   let state=(await db.doc('onlineState/'+maxRoom.roomId).get()).data();A.equal(state.hand.bidder,clients[1].uid);A.equal(state.hand.auction.filter(a=>a.bid===250).length,1);A.deepEqual(state.totals,before.totals);
-  while(state.hand.turn!==adminUser.uid){A.equal(state.members[state.hand.turn].kind,'bot');await db.doc('onlineState/'+maxRoom.roomId).update({'hand.deadline':Date.now()-10});await fetch('http://127.0.0.1:5001/demo-three-patti/asia-south1/kaliEmulatorTick',{method:'POST'});state=(await db.doc('onlineState/'+maxRoom.roomId).get()).data();}
-  await owner.locator('.max-bid-state').waitFor();A((await owner.locator('.max-bid-state').textContent()).includes('Maximum bid reached'));A.equal(await owner.locator('#bid select').count(),0);const protectedState=JSON.stringify(state);
-  for(const bid of [180,245,250,255])await A.rejects(send(owner,maxRoom.roomId,{type:'bid',bid}),/Invalid raise/);
+  A.equal(state.hand.phase,'trump');A.equal(state.hand.turn,clients[1].uid);
+  const protectedState=JSON.stringify(state);
+  for(const bid of [180,245,250,255])await A.rejects(send(challenger,maxRoom.roomId,{type:'bid',bid}),/Not eligible to bid/);
   A.equal(JSON.stringify((await db.doc('onlineState/'+maxRoom.roomId).get()).data()),protectedState);
-  await owner.locator('[data-action=pass]').click();await waitFor(async()=>((await db.doc('onlineState/'+maxRoom.roomId).get()).data()).hand.phase==='trump','last eligible PASS');state=(await db.doc('onlineState/'+maxRoom.roomId).get()).data();A.equal(state.hand.bid,250);A.equal(state.hand.bidder,clients[1].uid);
   await send(owner,maxRoom.roomId,{type:'stop',void:true});A.equal((await db.doc('rounds/online_'+state.hand.id).get()).exists,false);
-  report.checks.push(mode+' players: Max 250 draft and real Bid 250 submit, one request on double tap, maximum PASS-only state, lower/equal/over-limit rejection and no unfinished scores');
+  report.checks.push(mode+' players: Max 250 draft and real Bid 250 submit, one request on double tap, automatic maximum finalization, lower/equal/over-limit rejection and no unfinished scores');
  }
  // Six seats, one human + five bots. Exercise real server scheduled action handler.
  const six=await issue(owner,{operation:'create',playerId:'online_admin',mode:6,config:{extraThree:'D',sixSuits:['C','D']}});for(let seat=2;seat<=6;seat++)await send(owner,six.roomId,{type:'bot',seat,difficulty:seat===2?'easy':'normal'});await owner.evaluate(id=>enter(id),six.roomId);await send(owner,six.roomId,{type:'ready'});
@@ -93,7 +92,7 @@ async function send(page,roomId,action){for(let attempt=0;attempt<8;attempt++){c
   if(h.phase==='playing'&&h.tricks.length===0&&h.trick.length===0){await waitFor(async()=>await owner.evaluate(()=>room?.hand?.phase==='playing'),'six table');await owner.evaluate(()=>window.scrollTo(0,0));await owner.screenshot({path:artifacts+'/table-six-mobile.png',fullPage:true});report.screens.push('table-six-mobile.png');}
   if(h.turn===adminUser.uid){
    await owner.bringToFront();await owner.waitForFunction(({id,generation})=>room?.hand?.id===id&&room.hand.turnGeneration===generation&&seatConnected()&&!busy&&Number(root.dataset.revision)===room.revision,{id:h.id,generation:h.turnGeneration});
-   if(h.phase==='auction')await owner.locator('[data-action=pass]').click();
+   if(h.phase==='auction')await owner.locator(h.finalBid?'[data-action=bid-keep]':'[data-action=pass]').click();
    else if(h.phase==='trump')await owner.locator('[data-action="trump:H"]').click();
    else if(h.phase==='partners'){await owner.locator('#partners button').click();}
    else{await owner.locator('.hand-card.legal').first().click();await owner.locator('[data-action=confirm-card]').click();}

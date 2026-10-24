@@ -120,7 +120,7 @@
     room.paused = false;
     room.pauseReason = null;
     const ids = ps.map((p) => p.uid), next = ids[(ids.indexOf(def.uid) + 1) % ids.length];
-    room.hand = { id: room.id + "-" + room.handNumber, number: room.handNumber, phase: "auction", config: clone(room.config), mode: room.mode, seatMap: ps.map((p) => ({ uid: p.uid, seat: p.seat, playerId: p.playerId, name: p.name, kind: p.kind })), deck: cards, hands, bid: 155, bidder: def.uid, defaultBidder: def.uid, passed: [], opportunities: [def.uid], auction: [{ uid: def.uid, bid: 155, automatic: true, reason: "default-opening", at: now }], trump: null, direct: null, called: null, secret: null, partners: [], revealed: false, trick: [], tricks: [], captured: Object.fromEntries(ids.map((id) => [id, 0])), turn: next, turnGeneration: 0, deadline: null, remaining: null };
+    room.hand = { id: room.id + "-" + room.handNumber, number: room.handNumber, phase: "auction", config: clone(room.config), mode: room.mode, seatMap: ps.map((p) => ({ uid: p.uid, seat: p.seat, playerId: p.playerId, name: p.name, kind: p.kind })), deck: cards, hands, bid: 155, bidder: def.uid, defaultBidder: def.uid, passed: [], finalBid: false, opportunities: [def.uid], auction: [{ uid: def.uid, bid: 155, automatic: true, reason: "default-opening", at: now }], trump: null, direct: null, called: null, secret: null, partners: [], revealed: false, trick: [], tricks: [], captured: Object.fromEntries(ids.map((id) => [id, 0])), turn: next, turnGeneration: 0, deadline: null, remaining: null };
     arm(room, now);
     event(room, "deal", { handId: room.hand.id, defaultSeat: def.seat }, now);
   }
@@ -149,8 +149,9 @@
       }
     }
     if (!next) {
-      h.phase = "trump";
       h.turn = h.bidder;
+      if (h.bid === 250) h.phase = "trump";
+      else h.finalBid = true;
     } else h.turn = next;
     arm(room, now);
   }
@@ -415,17 +416,32 @@
       assert(connected(p), "Player is disconnected");
       assert(action.automatic || h.deadline === null || now < h.deadline, "Turn deadline expired");
       if (type === "bid") {
-        assert(h.phase === "auction" && !h.passed.includes(uid) && uid !== h.bidder, "Not eligible to bid");
-        if (action.pass) {
-          h.passed.push(uid);
+        assert(h.phase === "auction" && !h.passed.includes(uid), "Not eligible to bid");
+        if (h.finalBid) {
+          assert(uid === h.bidder && !action.pass, "Only highest bidder can finalize");
+          assert(action.keep === true ? action.bid === void 0 : Number.isInteger(action.bid) && action.bid % 5 === 0 && action.bid > h.bid && action.bid <= 250, "Invalid final bid");
+          if (!action.keep) h.bid = action.bid;
+          h.auction.push({ uid, bid: h.bid, keep: !!action.keep, final: true, automatic: !!action.automatic, reason: action.reason || null, at: now });
+          h.finalBid = false;
+          h.phase = "trump";
+          arm(room, now);
         } else {
-          assert(Number.isInteger(action.bid) && action.bid % 5 === 0 && action.bid > h.bid && action.bid <= 250, "Invalid raise");
-          h.bid = action.bid;
-          h.bidder = uid;
+          assert(uid !== h.bidder && !action.keep, "Not eligible to bid");
+          if (action.pass) {
+            h.passed.push(uid);
+          } else {
+            assert(Number.isInteger(action.bid) && action.bid % 5 === 0 && action.bid > h.bid && action.bid <= 250, "Invalid raise");
+            h.bid = action.bid;
+            h.bidder = uid;
+          }
+          if (!h.opportunities.includes(uid)) h.opportunities.push(uid);
+          h.auction.push({ uid, pass: !!action.pass, bid: action.pass ? null : action.bid, automatic: !!action.automatic, reason: action.automatic ? action.reason || "automatic" : null, at: now });
+          if (h.bid === 250) {
+            h.phase = "trump";
+            h.turn = h.bidder;
+            arm(room, now);
+          } else nextAuction(room, now);
         }
-        if (!h.opportunities.includes(uid)) h.opportunities.push(uid);
-        h.auction.push({ uid, pass: !!action.pass, bid: action.pass ? null : action.bid, automatic: !!action.automatic, reason: action.automatic ? action.reason || "automatic" : null, at: now });
-        nextAuction(room, now);
       } else if (type === "trump") {
         assert(h.phase === "trump" && SUITS.includes(action.suit), "Invalid trump");
         h.trump = action.suit;
@@ -475,7 +491,7 @@
     }));
     if (room.hand) {
       const h = room.hand;
-      r.hand = { id: h.id, number: h.number, phase: h.phase, mode: h.mode, config: h.config, seatMap: h.seatMap, bid: h.bid, bidder: h.bidder, defaultBidder: h.defaultBidder, passed: h.passed, opportunities: h.opportunities, auction: h.auction, trump: h.trump, direct: h.direct, called: h.called, revealed: h.revealed, secret: h.revealed ? h.secret : null, partners: h.revealed ? h.partners : null, trick: h.trick, tricks: h.tricks, captured: h.captured, turn: h.turn, turnGeneration: h.turnGeneration, deadline: h.deadline, remaining: h.remaining, counts: Object.fromEntries(Object.entries(h.hands).map(([id, c]) => [id, c.length])) };
+      r.hand = { id: h.id, number: h.number, phase: h.phase, mode: h.mode, config: h.config, seatMap: h.seatMap, bid: h.bid, bidder: h.bidder, defaultBidder: h.defaultBidder, passed: h.passed, finalBid: !!h.finalBid, opportunities: h.opportunities, auction: h.auction, trump: h.trump, direct: h.direct, called: h.called, revealed: h.revealed, secret: h.revealed ? h.secret : null, partners: h.revealed ? h.partners : null, trick: h.trick, tricks: h.tricks, captured: h.captured, turn: h.turn, turnGeneration: h.turnGeneration, deadline: h.deadline, remaining: h.remaining, counts: Object.fromEntries(Object.entries(h.hands).map(([id, c]) => [id, c.length])) };
     }
     return r;
   }

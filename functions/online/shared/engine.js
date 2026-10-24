@@ -46,13 +46,13 @@ function startHand(room,now,random){
  const def=ps.find(p=>p.seat===room.defaultSeat)||ps.find(p=>p.seat>room.defaultSeat)||ps[0];room.defaultSeat=def.seat;
  room.handNumber++;room.status='playing';room.startedAt=room.startedAt||now;room.paused=false;room.pauseReason=null;
  const ids=ps.map(p=>p.uid), next=ids[(ids.indexOf(def.uid)+1)%ids.length];
- room.hand={id:room.id+'-'+room.handNumber,number:room.handNumber,phase:'auction',config:clone(room.config),mode:room.mode,seatMap:ps.map(p=>({uid:p.uid,seat:p.seat,playerId:p.playerId,name:p.name,kind:p.kind})),deck:cards,hands,bid:155,bidder:def.uid,defaultBidder:def.uid,passed:[],opportunities:[def.uid],auction:[{uid:def.uid,bid:155,automatic:true,reason:'default-opening',at:now}],trump:null,direct:null,called:null,secret:null,partners:[],revealed:false,trick:[],tricks:[],captured:Object.fromEntries(ids.map(id=>[id,0])),turn:next,turnGeneration:0,deadline:null,remaining:null};
+ room.hand={id:room.id+'-'+room.handNumber,number:room.handNumber,phase:'auction',config:clone(room.config),mode:room.mode,seatMap:ps.map(p=>({uid:p.uid,seat:p.seat,playerId:p.playerId,name:p.name,kind:p.kind})),deck:cards,hands,bid:155,bidder:def.uid,defaultBidder:def.uid,passed:[],finalBid:false,opportunities:[def.uid],auction:[{uid:def.uid,bid:155,automatic:true,reason:'default-opening',at:now}],trump:null,direct:null,called:null,secret:null,partners:[],revealed:false,trick:[],tricks:[],captured:Object.fromEntries(ids.map(id=>[id,0])),turn:next,turnGeneration:0,deadline:null,remaining:null};
  arm(room,now);event(room,'deal',{handId:room.hand.id,defaultSeat:def.seat},now);
 }
 function arm(room,now){const h=room.hand;if(!h)return;h.turnGeneration++;h.deadline=null;h.remaining=null;if(room.paused||!active(room))return;const p=room.members[h.turn];if(p.kind==='bot')h.deadline=now+900;else if(h.phase==='auction'||h.phase==='playing')h.deadline=now+30000;}
 function turnIds(h){return h.seatMap.map(p=>p.uid);}
 function nextAuction(room,now){const h=room.hand,ids=turnIds(h);let next=null;for(let k=1;k<=ids.length;k++){const id=ids[(ids.indexOf(h.turn)+k)%ids.length];if(id!==h.bidder&&!h.passed.includes(id)){next=id;break;}}
- if(!next){h.phase='trump';h.turn=h.bidder;}else h.turn=next;arm(room,now);
+ if(!next){h.turn=h.bidder;if(h.bid===250)h.phase='trump';else h.finalBid=true;}else h.turn=next;arm(room,now);
 }
 function allReadyExceptAdmin(room){return ordered(room).length===room.mode&&ordered(room).every(p=>connected(p)&&p.approved&&(p.uid===room.admin||p.ready));}
 function finish(room,now){const h=room.hand;assert(Object.values(h.captured).reduce((a,b)=>a+b,0)===250,'Captured points must total 250');
@@ -141,9 +141,19 @@ function command(input,uid,action,now,random){const room=clone(input);assert(roo
  }else{
   member(room,uid);const h=room.hand;assert(active(room)&&!room.paused,'Game is not active');assert(h.turn===uid,'Not your turn');assert(connected(p),'Player is disconnected');assert(action.automatic||h.deadline===null||now<h.deadline,'Turn deadline expired');
   if(type==='bid'){
-   assert(h.phase==='auction'&&!h.passed.includes(uid)&&uid!==h.bidder,'Not eligible to bid');
-   if(action.pass){h.passed.push(uid);}else{assert(Number.isInteger(action.bid)&&action.bid%5===0&&action.bid>h.bid&&action.bid<=250,'Invalid raise');h.bid=action.bid;h.bidder=uid;}
-   if(!h.opportunities.includes(uid))h.opportunities.push(uid);h.auction.push({uid,pass:!!action.pass,bid:action.pass?null:action.bid,automatic:!!action.automatic,reason:action.automatic?(action.reason||'automatic'):null,at:now});nextAuction(room,now);
+   assert(h.phase==='auction'&&!h.passed.includes(uid),'Not eligible to bid');
+   if(h.finalBid){
+    assert(uid===h.bidder&&!action.pass,'Only highest bidder can finalize');
+    assert(action.keep===true? action.bid===undefined : Number.isInteger(action.bid)&&action.bid%5===0&&action.bid>h.bid&&action.bid<=250,'Invalid final bid');
+    if(!action.keep)h.bid=action.bid;
+    h.auction.push({uid,bid:h.bid,keep:!!action.keep,final:true,automatic:!!action.automatic,reason:action.reason||null,at:now});
+    h.finalBid=false;h.phase='trump';arm(room,now);
+   }else{
+    assert(uid!==h.bidder&&!action.keep,'Not eligible to bid');
+    if(action.pass){h.passed.push(uid);}else{assert(Number.isInteger(action.bid)&&action.bid%5===0&&action.bid>h.bid&&action.bid<=250,'Invalid raise');h.bid=action.bid;h.bidder=uid;}
+    if(!h.opportunities.includes(uid))h.opportunities.push(uid);h.auction.push({uid,pass:!!action.pass,bid:action.pass?null:action.bid,automatic:!!action.automatic,reason:action.automatic?(action.reason||'automatic'):null,at:now});
+    if(h.bid===250){h.phase='trump';h.turn=h.bidder;arm(room,now);}else nextAuction(room,now);
+   }
   }else if(type==='trump'){
    assert(h.phase==='trump'&&SUITS.includes(action.suit),'Invalid trump');h.trump=action.suit;h.phase='partners';arm(room,now);
   }else if(type==='partners'){
@@ -161,7 +171,7 @@ function command(input,uid,action,now,random){const room=clone(input);assert(roo
  room.revision++;return room;
 }
 function publicState(room){const r=clone(room);delete r.hand;delete r.events;r.members=Object.fromEntries(Object.entries(r.members).map(([id,p])=>{const v={...p};return[id,v];}));
- if(room.hand){const h=room.hand;r.hand={id:h.id,number:h.number,phase:h.phase,mode:h.mode,config:h.config,seatMap:h.seatMap,bid:h.bid,bidder:h.bidder,defaultBidder:h.defaultBidder,passed:h.passed,opportunities:h.opportunities,auction:h.auction,trump:h.trump,direct:h.direct,called:h.called,revealed:h.revealed,secret:h.revealed?h.secret:null,partners:h.revealed?h.partners:null,trick:h.trick,tricks:h.tricks,captured:h.captured,turn:h.turn,turnGeneration:h.turnGeneration,deadline:h.deadline,remaining:h.remaining,counts:Object.fromEntries(Object.entries(h.hands).map(([id,c])=>[id,c.length]))};}
+ if(room.hand){const h=room.hand;r.hand={id:h.id,number:h.number,phase:h.phase,mode:h.mode,config:h.config,seatMap:h.seatMap,bid:h.bid,bidder:h.bidder,defaultBidder:h.defaultBidder,passed:h.passed,finalBid:!!h.finalBid,opportunities:h.opportunities,auction:h.auction,trump:h.trump,direct:h.direct,called:h.called,revealed:h.revealed,secret:h.revealed?h.secret:null,partners:h.revealed?h.partners:null,trick:h.trick,tricks:h.tricks,captured:h.captured,turn:h.turn,turnGeneration:h.turnGeneration,deadline:h.deadline,remaining:h.remaining,counts:Object.fromEntries(Object.entries(h.hands).map(([id,c])=>[id,c.length]))};}
  return r;
 }
 function privateState(room,uid){const p=room.members[uid],h=room.hand,owns=!!(p&&p.seat!==null&&p.status!=='Removed'&&h&&Object.prototype.hasOwnProperty.call(h.hands,uid));return {handId:owns?h.id:null,revision:room.revision,cards:owns?h.hands[uid].slice():[]};}

@@ -102,6 +102,7 @@ function decide(room,uid,cards,difficulty='normal'){
    const best=Math.max(...R.SUITS.map(s=>{const cs=cards.filter(c=>R.card(c).suit===s);return cs.length*5+cs.filter(c=>['A','K','Q'].includes(R.card(c).rank)).length*7;}));
    limit=Math.min(170,155+5*Math.max(0,Math.floor((best-30)/5)));
   }
+  if(h.finalBid)return h.bid<limit?{type:'bid',bid:Math.min(250,limit)}:{type:'bid',keep:true};
   return h.bid<limit?{type:'bid',bid:h.bid+5}:{type:'bid',pass:true};
  }
  if(h.phase==='trump')return {type:'trump',suit:handStrength(room,cards)[0].suit};
@@ -119,6 +120,6 @@ function decide(room,uid,cards,difficulty='normal'){
  if(h.phase==='playing')return {type:'play',card:difficulty==='easy'?R.legal(cards,h.trick).sort(low)[0]:chooseCard(room,uid,cards)};
  throw new Error('No bot action available');
 }
-function timeout(room,uid,cards){return room.hand.phase==='auction'?{type:'bid',pass:true}:{type:'play',card:chooseCard(room,uid,cards)};}
+function timeout(room,uid,cards){return room.hand.phase==='auction'?(room.hand.finalBid?{type:'bid',keep:true}:{type:'bid',pass:true}):{type:'play',card:chooseCard(room,uid,cards)};}
 return {decide,timeout,chooseCard,assess,handStrength};
 });
