@@ -94,7 +94,7 @@ async function api(body,endpoint='kaliApi'){
  try{
  const headers={'Content-Type':'application/json'};if(user){const start=performance.now(),aborted=new Promise((_,reject)=>controller.signal.addEventListener('abort',()=>reject(new Error('Connection timed out.')),{once:true}));try{headers.Authorization='Bearer '+await Promise.race([user.getIdToken(),aborted]);}finally{row.stages.clientToken=performance.now()-start;}}
  let res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});received=true;
- if(res.status===401&&user){headers.Authorization='Bearer '+await user.getIdToken(true);res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});}
+ if(res.status===401&&user){headers.Authorization='Bearer '+await user.getIdToken(true);received=false;res=await fetch(host+endpoint,{method:'POST',headers,body:JSON.stringify(body),cache:'no-store',signal:controller.signal});received=true;}
  row.status=res.status;
  const timingPattern=/([a-zA-Z]+);dur=([0-9.]+)/g;let match;while((match=timingPattern.exec(res.headers.get('Server-Timing')||''))!==null)if(['queue','auth','read','begin','commit','presence','total'].includes(match[1]))row.stages[match[1]]=Number(match[2]);
  let value;try{value=await res.json();}catch{const e=Error('Game server unavailable. Check deployment and connection.');e.retryable=true;throw e;}

@@ -309,7 +309,9 @@ async function api(body, endpoint = "kaliApi") {
     received = true;
     if (res.status === 401 && user) {
       headers.Authorization = "Bearer " + await user.getIdToken(true);
+      received = false;
       res = await fetch(host + endpoint, { method: "POST", headers, body: JSON.stringify(body), cache: "no-store", signal: controller.signal });
+      received = true;
     }
     row.status = res.status;
     const timingPattern = /([a-zA-Z]+);dur=([0-9.]+)/g;
