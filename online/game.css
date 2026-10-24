@@ -178,3 +178,7 @@ body.live-game.bidding{--phase-height:92px}
 .room-lobby footer{padding-bottom:calc(var(--lobby-dock-height,112px) + 20px)}
 .room-lobby .pause-banner,.room-lobby #notice:not(:empty){bottom:calc(var(--lobby-dock-height,112px) + 12px)}
 @media(max-width:650px){.lobby-main .lobby-seats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* Public move playback: identify the seat and keep every trick card readable. */
+.table-seat.just-played{border-color:#f3d47f;box-shadow:0 0 0 2px #f3d47f80,0 0 16px #f3d47f35}
+.played-card.just-played .face{outline:2px solid #f3d47f;outline-offset:1px}
