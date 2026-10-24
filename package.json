@@ -23,7 +23,8 @@
     "test:bot-comparison": "node online/test/bot-comparison.cjs",
     "test:lobby-scroll": "node online/test/lobby-scroll.browser.cjs",
     "test:card-double-tap": "node online/test/card-double-tap.browser.cjs",
-    "test:card-playback": "node online/test/card-playback.browser.cjs"
+    "test:card-playback": "node online/test/card-playback.browser.cjs",
+    "test:usage-controls": "node online/test/usage-controls.browser.cjs"
   },
   "devDependencies": {
     "@firebase/rules-unit-testing": "^3.0.3",

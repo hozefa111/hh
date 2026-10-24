@@ -265,7 +265,7 @@ function patchChildren(parent,next){
 let renderedMarkup=null,renderedView=null;
 function patchGame(markup){if(markup===renderedMarkup)return;const template=document.createElement('template');template.innerHTML=markup;patchChildren(root,template.content);renderedMarkup=markup;}
 function render(){if(renderFrame===null)renderFrame=requestAnimationFrame(renderNow);}
-function renderNow(){if(!canPlayCards())resetCardTaps();if(renderFrame!==null)cancelAnimationFrame(renderFrame);renderFrame=null;root.dataset.revision=room?.revision??'';const view=(room?room.id+':'+(liveTable()?'table':'lobby'):loadingRoom?'loading':'home');const newView=view!==renderedView;renderedView=view;
+function renderNow(){syncHistory();if(!canPlayCards())resetCardTaps();if(renderFrame!==null)cancelAnimationFrame(renderFrame);renderFrame=null;root.dataset.revision=room?.revision??'';const view=(room?room.id+':'+(liveTable()?'table':'lobby'):loadingRoom?'loading':'home');const newView=view!==renderedView;renderedView=view;
 const drafts=Array.from(root.querySelectorAll('form')).map(f=>({id:f.id,target:f.dataset.target,context:f.id==='bid'?f.dataset.hand+':'+f.dataset.generation:null,values:Array.from(f.querySelectorAll('input,select')).map(i=>({name:i.name,value:i.value}))}));
 const focus=document.activeElement,focused=focus?.name?{name:focus.name,form:focus.form?.id,start:focus.selectionStart}:null;document.body.classList.toggle('reduced',reduced);// publicState omits hand in a new lobby. toggle(token, undefined) toggles!
 const live=liveTable();document.body.classList.toggle('live-game',live);const dock=!!room&&!live&&room.status!=='stopped';document.body.classList.toggle('room-lobby',dock);document.body.classList.toggle('bidding',live&&room.hand.phase==='auction');patchGame(header()+`<main class="${live?'live-main':dock?'lobby-main':''}">${error?`<p class="error">${esc(error)}</p>`:''}${room?recoveryPanel()+lobby():loadingRoom?'<section class="panel"><h2>Connecting to your table…</h2><p>Restoring seats and your private hand.</p></section>':home()}</main>${dock?lobbyReady():''}<footer>3 PATTI PRO · Same players. Same scorecard.</footer>`);for(const draft of drafts){const form=Array.from(root.querySelectorAll('form')).find(f=>f.id===draft.id&&f.dataset.target===draft.target&&(draft.context===null||draft.context===f.dataset.hand+':'+f.dataset.generation));if(!form&&draft.id==='bid'){const fresh=document.getElementById('bid');if(fresh)fresh.elements.bid.selectedIndex=0;}if(form)for(const v of draft.values){const input=Array.from(form.elements).find(i=>i.name===v.name);if(input&&(!(input instanceof HTMLSelectElement)||Array.from(input.options).some(o=>o.value===v.value)))input.value=v.value;}}
@@ -288,12 +288,14 @@ if(!reduced)for(const kind of motionQueue.splice(0)){
 function tick(){if(document.hidden)return;if(busy&&pendingSince){const hint=root.querySelector('.hand-hint'),label=performance.now()-pendingSince>=3000?'Waiting for server… Please do not submit again.':'Sending your move…';if(hint&&hint.textContent!==label)hint.textContent=label;}const el=document.getElementById('countdown');if(!el||!room?.hand)return;const h=room.hand,key=h.id+':'+h.turnGeneration;if(!room.paused&&seatConnected()&&h.turn===uid()&&lastSoundTurn!==key){lastSoundTurn=key;playSound('turn');}const seconds=h.deadline===null?null:Math.max(0,Math.ceil((h.deadline-(clockAnchor.server+performance.now()-clockAnchor.mono))/1000));if(!room.paused&&seatConnected()&&h.turn===uid()&&seconds!==null&&seconds<=5&&seconds>0&&lastWarning!==key+':'+seconds){lastWarning=key+':'+seconds;playSound('warning');}const label=room.paused?'Ⅱ':room.members[h.turn]?.kind==='bot'?'…':seconds===null?'—':seconds+'s',urgent=room.members[h.turn]?.kind!=='bot'&&seconds!==null&&seconds<=5,time=Math.min(100,(seconds||0)/30*100)+'%',state=label+':'+urgent+':'+time;if(el._clockState!==state){el._clockState=state;if(el.textContent!==label)el.textContent=label;el.classList.toggle('urgent',urgent);el.style.setProperty('--time',time);}}
 setInterval(tick,250);
 async function attachPresence(id){
- const owner=uid(),ctx={active:true,transport:false,epoch:0,pending:false,ref:null,retry:null,failures:0,access:false,attempt:null};
+ const owner=uid(),ctx={active:true,transport:false,epoch:0,pending:false,ref:null,retry:null,failures:0,nextAttempt:0,access:false,attempt:null};
  const valid=epoch=>ctx.active&&subscribedRoomId===id&&uid()===owner&&ctx.epoch===epoch;
  const connected=presence.ref('.info/connected'),ownConnections=presence.ref('onlinePresence/'+id+'/'+owner+'/connections');let onOwn=null;
  function watchOwn(snapshot){if(ctx.active&&ctx.ref&&!ctx.pending&&!snapshot.hasChild(ctx.ref.key)){connectionReady=false;render();retry();}}
- function retry(){if(!ctx.active||ctx.retry||(!ctx.transport&&ctx.access))return;ctx.retry=setTimeout(()=>{ctx.retry=null;repair();},Math.min(10000,1000*2**Math.min(ctx.failures++,4)));}
- async function repair(){
+ function retry(){if(!ctx.active||ctx.retry||(!ctx.transport&&ctx.access))return;ctx.nextAttempt=Math.max(ctx.nextAttempt,Date.now()+Math.min(60000,1000*2**Math.min(ctx.failures++,6)));ctx.retry=setTimeout(()=>{ctx.retry=null;repair();},Math.max(0,ctx.nextAttempt-Date.now()));}
+ async function repair(force=false){
+  if(force){clearTimeout(ctx.retry);ctx.retry=null;ctx.nextAttempt=0;ctx.failures=0;}
+  if(Date.now()<ctx.nextAttempt)return;
   if(!ctx.active||ctx.pending||!navigator.onLine||ctx.access&&!ctx.transport)return;
   if(connectionReady&&ctx.ref&&room?.members[owner]?.connected===true){recoverPending();return;}
   const epoch=ctx.epoch,ref=ctx.ref||ownConnections.push(),attempt=new AbortController();ctx.ref=ref;ctx.pending=true;ctx.attempt=attempt;
@@ -307,7 +309,7 @@ async function attachPresence(id){
    await wait(ref.set(true));if(!valid(epoch))return;
    const result=await wait(api({operation:'presenceSync',roomId:id}));if(!valid(epoch))return;
    if(!result.connected)throw Error('Presence acknowledgement pending');
-   connection=ref;connectionReady=true;ctx.failures=0;if(ctx.retry){clearTimeout(ctx.retry);ctx.retry=null;}recoverPending();render();
+   connection=ref;connectionReady=true;ctx.failures=0;ctx.nextAttempt=0;if(ctx.retry){clearTimeout(ctx.retry);ctx.retry=null;}recoverPending();render();
   }catch(e){if(valid(epoch)){if(attempt.signal.aborted){ctx.epoch++;ctx.ref=null;}connectionReady=false;render();retry();}}
   finally{
    clearTimeout(timer);if(ctx.attempt===attempt)ctx.attempt=null;ctx.pending=false;
@@ -317,7 +319,7 @@ async function attachPresence(id){
  const onTransport=connected.on('value',snapshot=>{
   if(!ctx.active)return;const wasConnected=ctx.transport;ctx.transport=snapshot.val()===true;
   if(!ctx.transport){if(wasConnected){ctx.epoch++;ctx.ref=null;connection=null;ctx.attempt?.abort();}connectionReady=false;render();}
-  else repair();
+  else repair(true);
  });
  // A real data subscription keeps the RTDB transport active and detects lost registrations.
  const watchdog=setInterval(()=>{if(!document.hidden){repair();recoverPending();}},15000);
@@ -343,10 +345,22 @@ function receiveRoomSnapshot(next){
  if(!previous.hand?.revealed&&next.hand?.revealed){motionQueue.push('reveal');playSound('reveal');}
 }updateTablePlayback(previous,next);room=next;previous=next;advancePlayback();error='';if(!seatConnected())presenceRecovery?.();recoverPending();render();
 }
+let historyUnsub=null,historyOwner=null,historyEpoch=0;
+function stopHistory(){historyEpoch++;historyUnsub?.();historyUnsub=null;historyOwner=null;}
+function syncHistory(){
+ const key=historyOpen&&room?uid()+':'+room.id:null;
+ if(key===historyOwner)return;stopHistory();if(!key)return;
+ const id=room.id,epoch=historyEpoch;historyOwner=key;
+ historyUnsub=db.collection('onlineRooms/'+id+'/hands').orderBy('handNumber','desc').limit(25).onSnapshot(s=>{
+  if(epoch!==historyEpoch||room?.id!==id)return;
+  const combined=new Map(records.map(r=>[r.handId,r]));for(const d of s.docs)combined.set(d.id,d.data());
+  records=[...combined.values()].sort((a,b)=>b.handNumber-a.handNumber);historyMore=s.size===25;render();
+ },e=>{if(epoch===historyEpoch)notice('Hand history unavailable. '+e.message);});
+}
 async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;uncertainCommand=restorePending(id);recoveryAttempts=0;
  unsubs.push(db.doc('onlineRooms/'+id).onSnapshot(s=>{if(subscribedRoomId!==id)return;if(!s.metadata.hasPendingWrites&&!s.metadata.isFromCache&&s.exists)speedSnapshot(id,s.data().revision);if(!s.exists){unavailableRoom(id);return;}loadingRoom=false;receiveRoomSnapshot(s.data());},e=>roomReadError(id,e)));
  unsubs.push(db.doc('onlineRooms/'+id+'/private/'+uid()).onSnapshot(s=>{if(subscribedRoomId!==id)return;own=s.exists?s.data():{cards:[]};render();},e=>roomReadError(id,e)));
- unsubs.push(db.collection('onlineRooms/'+id+'/hands').orderBy('handNumber','desc').limit(25).onSnapshot(s=>{if(subscribedRoomId!==id)return;const combined=new Map(records.map(r=>[r.handId,r]));for(const d of s.docs)combined.set(d.id,d.data());records=[...combined.values()].sort((a,b)=>b.handNumber-a.handNumber);if(s.size<25)historyMore=false;if(historyOpen)render();}));
+ unsubs.push(stopHistory);
  await attachPresence(id);localStorage.setItem('kaliRoom',id);
 }
 function bidIntent(form){return form.dataset.hand+':'+form.dataset.generation+':'+form.dataset.baseBid+':'+form.elements.bid.value;}
@@ -421,9 +435,10 @@ if(await askConfirm('Void unfinished hand?','No points from this unfinished hand
  }else if(['ready','pause','resume'].includes(action))await command({type:action});
  }catch(err){if(err.name!=='AbortError')notice(err.message);}});
 async function loadProfiles(){profiles=(await db.collection('players').get()).docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>String(a.name).localeCompare(String(b.name)));render();}
+function activeMembershipQuery(owner){return db.collection('onlineMemberships/'+owner+'/rooms').where('status','in',['lobby','playing','between']);}
 let membershipUnsub=null;
-auth.onAuthStateChanged(async current=>{if(user&&user.uid!==current?.uid){uncertainCommand=null;speedRows.length=0;speedSnapshots.clear();speedPending.clear();clearCollection();unsubs.forEach(f=>f());unsubs=[];room=null;own={cards:[]};memberships=[];subscribedRoomId=null;loadingRoom=false;if(connection){connection.remove().catch(()=>{});connection=null;}presence.goOffline();presence.goOnline();}user=current;admin=false;if(membershipUnsub)membershipUnsub();try{if(user){const token=await user.getIdTokenResult();const role=await db.doc('admins/'+user.uid).get();admin=token.claims.admin===true||role.exists;membershipUnsub=db.collection('onlineMemberships/'+user.uid+'/rooms').onSnapshot(s=>{memberships=s.docs.map(d=>d.data());if(!room)render();});}await loadProfiles();if(user)await api({operation:'clock'});}catch(e){error=e.message;}render();});
-window.kaliReconnect=()=>{recoveryAttempts=0;presenceRecovery?.();recoverPending();render();};
+auth.onAuthStateChanged(async current=>{if(user&&user.uid!==current?.uid){uncertainCommand=null;speedRows.length=0;speedSnapshots.clear();speedPending.clear();clearCollection();unsubs.forEach(f=>f());unsubs=[];room=null;own={cards:[]};memberships=[];subscribedRoomId=null;loadingRoom=false;if(connection){connection.remove().catch(()=>{});connection=null;}presence.goOffline();presence.goOnline();}user=current;admin=false;if(membershipUnsub)membershipUnsub();try{if(user){const token=await user.getIdTokenResult();const role=await db.doc('admins/'+user.uid).get();admin=token.claims.admin===true||role.exists;membershipUnsub=activeMembershipQuery(user.uid).onSnapshot(s=>{memberships=s.docs.map(d=>d.data());if(!room)render();});}await loadProfiles();if(user)await api({operation:'clock'});}catch(e){error=e.message;}render();});
+window.kaliReconnect=()=>{recoveryAttempts=0;presenceRecovery?.(true);recoverPending();render();};
 document.addEventListener('visibilitychange',()=>{if(document.hidden){clearCollection();speedFrame();}else window.kaliReconnect();});
 window.addEventListener('online',window.kaliReconnect);window.addEventListener('offline',()=>{connectionReady=false;render();});
 // Native injects only an expiring one-use exchange after this document has loaded.
