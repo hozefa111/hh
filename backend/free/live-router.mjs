@@ -15,6 +15,7 @@ export class KaliLiveDirectory extends DurableObject {
    this.sql.exec('INSERT INTO live_rooms(id,code,owner,created) VALUES(?,?,?,?)',b.id,b.code,b.uid,Date.now());result={code:b.code};
   }else if(b.op==='update'){this.sql.exec('UPDATE live_rooms SET active=?,revision=? WHERE id=? AND revision<=?',b.status==='stopped'?0:1,b.revision,b.id,b.revision);result={ok:true};
   }else if(b.op==='member'){this.sql.exec('INSERT OR IGNORE INTO live_members(uid,room) VALUES(?,?)',b.uid,b.room);result={ok:true};}
+  else if(b.op==='scoreList'){const c=b.cursor,rows=[...this.sql.exec('SELECT m.room,r.active,r.created FROM live_members m JOIN live_rooms r ON r.id=m.room WHERE m.uid=?'+(c?' AND (r.active,r.created,r.id)<(?,?,?)':'')+' ORDER BY r.active DESC,r.created DESC,r.id DESC LIMIT 26',b.uid,...(c?[c.active,c.created,c.id]:[]))];const page=rows.slice(0,25),last=page.at(-1);result={rows:page,next:rows.length>25?{active:last.active,created:last.created,id:last.room}:null};}
   else if(b.op==='list')result=[...this.sql.exec('SELECT m.room FROM live_members m JOIN live_rooms r ON r.id=m.room WHERE m.uid=? AND r.active=1 ORDER BY r.created DESC LIMIT 100',b.uid)].map(r=>r.room);
   else throw Error('Unsupported directory operation');
  });return Response.json(result);}
@@ -28,7 +29,7 @@ export async function liveRoute(request,env){
  const oldJoin=!socket&&((body.action?.type==='join'||body.operation==='liveProfiles')&&!body.roomId);
  let roomId=socket?url.searchParams.get('roomId'):body.operation==='sessionHistory'?body.sessionId:body.roomId;
  if(oldJoin&&env.KALI_LIVE_DIRECTORY){const found=await directory({op:'lookup',code:String(body.code||'').trim().toUpperCase()});if(found)roomId=found;}
- const createRequest=body?.operation==='create'&&!!env.KALI_LIVE_DIRECTORY&&Number(body.clientProtocol)>=2,creation=body?.operation==='create'&&String(env.ENABLE_CLOUDFLARE_V2)==='true',rooms=body?.operation==='liveRooms',transport=body?.operation==='transport';
+ const createRequest=body?.operation==='create'&&!!env.KALI_LIVE_DIRECTORY&&Number(body.clientProtocol)>=2,creation=body?.operation==='create'&&String(env.ENABLE_CLOUDFLARE_V2)==='true',rooms=['liveRooms','scoreboardRooms'].includes(body?.operation),transport=body?.operation==='transport';
  if(!socket&&!liveId(roomId)&&!creation&&!createRequest&&!rooms&&!transport)return null;
  const target=id=>env.KALI_LIVE_ROOMS.getByName(id);
  if(socket){if(!liveId(roomId))return Response.json({error:'Invalid room'},{status:400});return target(roomId).fetch(request);}
@@ -37,6 +38,7 @@ export async function liveRoute(request,env){
  const identity=sharedIdentity(env),who=await identity.verify(token[1]);
  const call=async(id,b,profile=null)=>target(id).fetch(new Request('https://room/',{method:'POST',body:JSON.stringify({who,body:b,profile})}));
  if(transport)return Response.json({transport:liveId(roomId)?'cloudflare-v2':'firestore',serverNow:Date.now()});
+ if(body.operation==='scoreboardRooms'){const c=body.cursor;if(c&&(![0,1].includes(c.active)||!Number.isSafeInteger(c.created)||!liveId(c.id)))throw Error('Invalid session cursor');const page=await directory({op:'scoreList',uid:who.uid,cursor:c}),rows=[],removed=[];for(const {room:id}of page.rows){const res=await call(id,{operation:'liveDirectory',includeScores:true});if(res.ok)rows.push(await res.json());else if((await res.json()).error?.includes('Session was deleted'))removed.push(id);}return Response.json({rooms:rows,removed,next:page.next,serverNow:Date.now()});}
  if(rooms){const ids=await directory({op:'list',uid:who.uid}),rows=[];for(const id of ids){const res=await call(id,{operation:'liveDirectory'});if(res.ok){const row=await res.json();if(row.status!=='stopped')rows.push(row);}}return Response.json({rooms:rows,serverNow:Date.now()});}
  if(creation||createRequest){
   if(!/^[a-zA-Z0-9_-]{8,100}$/.test(body.commandId||''))throw Error('Command ID required');
@@ -51,7 +53,7 @@ export async function liveRoute(request,env){
   const room=R.create({id:roomId,code,uid:who.uid,name:profiles[body.playerId].name,playerId:body.playerId,sessionName,mode:body.mode,config:body.config,difficulty:body.difficulty},Date.now());
   const res=await call(roomId,{operation:'init',room,profiles,createFingerprint:JSON.stringify(body)});if(res.ok)await directory({op:'member',uid:who.uid,room:roomId});return res;
  }
- if(body.operation&&!['snapshot','socketTicket','liveHistory','sessionHistory','liveDirectory','liveStats','liveProfiles'].includes(body.operation))throw Error('Unsupported live operation');
+ if(body.operation&&!['snapshot','socketTicket','scoreboardTicket','liveHistory','sessionHistory','liveDirectory','liveStats','liveProfiles'].includes(body.operation))throw Error('Unsupported live operation');
  let profile=null;if(['join','approve','reserve'].includes(body.action?.type)&&body.action.playerId){const p=body.action.playerId;if(!/^[-a-zA-Z0-9_]{1,128}$/.test(p))throw Error('Invalid player profile');const check=await call(roomId,{operation:'hasProfile',playerId:p});if(!check.ok)return check;const known=await check.json();if(body.action.type!=='join'&&!known.owner)throw Error('Only room admin can manage this session');if(!known.known){const value=await new Firestore(env.FIREBASE_PROJECT_ID,()=>identity.token()).get('players/'+p);if(!value)throw Error('Player profile not found');profile={id:p,value};}}
  const res=await call(roomId,{...body,roomId},profile);if(res.ok&&body.action?.type==='join')await directory({op:'member',uid:who.uid,room:roomId});return res;
 }

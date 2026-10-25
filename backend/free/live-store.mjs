@@ -12,15 +12,18 @@ export class LiveStore {
  write(key,value){this.sql.exec('INSERT INTO live_meta(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',key,JSON.stringify(value));}
  profile(id){return Promise.resolve(this.read('profiles')?.[id]||null);}
  lookup(){throw Error('Room lookup belongs to the directory');}
- async create(room){this.storage.transactionSync(()=>{if(this.read('room'))throw Error('Room already exists');room.transport='cloudflare-v2';this.write('room',room);this.write('directoryDirty',room.revision);});}
+ async create(room){this.storage.transactionSync(()=>{if(this.read('room'))throw Error('Room already exists');room.transport='cloudflare-v2';room.scoreboardRevision=0;this.write('room',room);this.write('directoryDirty',room.revision);});}
  async transact(id,key,fingerprint,fn){return this.storage.transactionSync(()=>{
   const before=this.read('room');if(!before||before.id!==id)throw Error('Room not found');if(this.read('deleted'))throw Error('Session was deleted');
   if(key){const old=[...this.sql.exec('SELECT fingerprint,result FROM live_receipts WHERE key=?',key)][0];if(old){if(old.fingerprint!==fingerprint)throw Error('Command ID already used');return JSON.parse(old.result);}}
   const {next,result}=fn(before);
-  if(next){this.write('room',next);this.enqueue(before,next);}
+  if(next){this.enqueue(before,next);this.write('room',next);}
   if(key)this.sql.exec('INSERT INTO live_receipts(key,fingerprint,result) VALUES(?,?,?)',key,fingerprint,JSON.stringify(result));return result;
  });}
  enqueue(before,next){
+  const seats=r=>Object.values(r.members).filter(p=>p.seat!==null&&p.status!=='Removed').map(p=>[p.playerId,p.seat]);
+  const changed=before.completed!==next.completed||before.status!==next.status||before.paused!==next.paused||before.sessionName!==next.sessionName||JSON.stringify(before.scoreNames)!==JSON.stringify(next.scoreNames)||JSON.stringify(before.totals)!==JSON.stringify(next.totals)||JSON.stringify(seats(before))!==JSON.stringify(seats(next));
+  next.scoreboardRevision=(before.scoreboardRevision||0)+(changed?1:0);
   if(before.status!==next.status)this.write('directoryDirty',next.revision);
   const h=next.hand,completed=h&&h.phase==='complete'&&next.completed>before.completed,voided=h&&h.phase==='void'&&before.hand?.phase!=='void';
   if(completed||voided){const result=completed?{...next.lastResult,handNumber:h.number,tricks:h.tricks,deckConfig:h.config}:{handId:h.id,handNumber:h.number,void:true,seatMap:h.seatMap,tricks:h.tricks,deckConfig:h.config,completedAt:Date.now()};this.sql.exec('INSERT INTO live_hands(number,payload) VALUES(?,?)',h.number,JSON.stringify(result));}
