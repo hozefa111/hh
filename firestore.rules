@@ -5,17 +5,31 @@ service cloud.firestore {
   function admin(){return signed() && (request.auth.token.get('admin',false)==true || exists(/databases/$(database)/documents/admins/$(request.auth.uid)));}
   function noSessionDeletion(){return !exists(/databases/$(database)/documents/meta/sessionDeletionLock);}
   function roomMember(room){return signed() && exists(/databases/$(database)/documents/onlineRooms/$(room)/members/$(request.auth.uid));}
+  function trackerState(){return /databases/$(database)/documents/trackerSync/state;}
+  function journaled(path){return !exists(trackerState()) || get(trackerState()).data.get('enforced',false)!=true || (getAfter(trackerState()).data.revision==get(trackerState()).data.revision+1 && path in getAfter(trackerState()).data.paths);}
+  function journalEvent(data){return data.eventId is string && data.paths is list && data.paths.size()>0 && data.paths.size()<=450 && getAfter(/databases/$(database)/documents/trackerChanges/$(data.eventId)).data=={'revision':data.revision,'epoch':data.epoch,'paths':data.paths};}
+  match /trackerSync/state {
+   allow read: if true;
+   allow create: if admin() && request.resource.data.keys().hasOnly(['mode','epoch','revision','eventId','paths','enforced']) && request.resource.data.get('enforced',false)==false && request.resource.data.mode=='prepare' && request.resource.data.epoch==1 && request.resource.data.revision==1 && journalEvent(request.resource.data);
+   allow update: if admin() && request.resource.data.keys().hasOnly(resource.data.keys()) && request.resource.data.keys().hasAll(resource.data.keys()) && request.resource.data.get('enforced',false)==resource.data.get('enforced',false) && request.resource.data.mode==resource.data.mode && request.resource.data.epoch==resource.data.epoch && request.resource.data.revision==resource.data.revision+1 && journalEvent(request.resource.data);
+   allow delete: if false;
+  }
+  match /trackerChanges/{event} {
+   allow read: if true;
+   allow create: if admin() && getAfter(trackerState()).data.eventId==event && request.resource.data=={'revision':getAfter(trackerState()).data.revision,'epoch':getAfter(trackerState()).data.epoch,'paths':getAfter(trackerState()).data.paths};
+   allow update,delete: if false;
+  }
   match /admins/{uid} { allow get: if signed()&&request.auth.uid==uid; allow list,write: if false; }
-  match /players/{id} { allow read: if true; allow write: if admin(); }
+  match /players/{id} { allow read: if true; allow write: if admin() && journaled("players/"+id); }
   match /rounds/{id} {
    allow read: if true;
-   allow create: if admin() && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
-   allow update,delete: if admin() && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow create: if admin() && journaled("rounds/"+id) && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow update,delete: if admin() && journaled("rounds/"+id) && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
   }
   match /sessions/{id} {
    allow read: if true;
-   allow create: if admin() && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
-   allow update,delete: if admin() && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow create: if admin() && journaled("sessions/"+id) && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow update,delete: if admin() && journaled("sessions/"+id) && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
   }
   match /onlineRooms/{room} {
    allow get: if roomMember(room); allow list,write: if false;

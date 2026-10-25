@@ -1,3 +1,4 @@
+const {journalTransaction}=require('./tracker-journal');
 'use strict';
 const {onRequest}=require('firebase-functions/v2/https');
 const {onTaskDispatched}=require('firebase-functions/v2/tasks');
@@ -38,7 +39,7 @@ function writeRoom(tx,before,next,links=[]){
 }
 
 const store={
- history:async(uid,request)=>db.runTransaction(async tx=>{
+ history:async(uid,request)=>journalTransaction(db,async tx=>{
   const receipt=db.doc('onlineHistoryReceipts/'+uid+'_'+request.commandId),saved=await tx.get(receipt),fingerprint=JSON.stringify(request);
   if(saved.exists){if(saved.data().fingerprint!==fingerprint)throw new Error('Command ID already used');return saved.data().result;}
   const state=await tx.get(canonical(request.sessionId)),ref=db.doc('sessions/'+request.sessionId),session=await tx.get(ref);
@@ -49,8 +50,8 @@ const store={
  }),
  profile:async id=>{if(!id||!/^[-a-zA-Z0-9_]{1,128}$/.test(id))return null;const s=await db.doc('players/'+id).get();return s.exists?s.data():null;},
  lookup:async code=>{const s=await db.doc('onlineCodes/'+code).get();return s.exists?s.data().roomId:null;},
- create:async(room)=>db.runTransaction(async tx=>{const codeRef=db.doc('onlineCodes/'+room.code),cs=await tx.get(codeRef);if(cs.exists)throw new Error('Room code collision. Please create again.');const link=await bindProfile(tx,room,room.members[room.admin]);tx.create(codeRef,{roomId:room.id});writeRoom(tx,null,room,[link]);}),
- transact:async(roomId,key,fingerprint,fn)=>db.runTransaction(async tx=>{
+ create:async(room)=>journalTransaction(db,async tx=>{const codeRef=db.doc('onlineCodes/'+room.code),cs=await tx.get(codeRef);if(cs.exists)throw new Error('Room code collision. Please create again.');const link=await bindProfile(tx,room,room.members[room.admin]);tx.create(codeRef,{roomId:room.id});writeRoom(tx,null,room,[link]);}),
+ transact:async(roomId,key,fingerprint,fn)=>journalTransaction(db,async tx=>{
   const state=await tx.get(canonical(roomId));if(!state.exists)throw new Error('Room not found');
   const receipt=key?canonical(roomId).collection('receipts').doc(key):null;if(receipt){const s=await tx.get(receipt);if(s.exists){if(s.data().fingerprint!==fingerprint)throw new Error('Command ID already used');return s.data().result;}}
   const before=state.data(),{next,result}=fn(before);if(!next)return result;
@@ -62,7 +63,7 @@ const deletionDb={
  get:async(path,tx)=>{const s=await(tx?tx.get(db.doc(path)):db.doc(path).get());if(!s.exists)return null;const data=s.data();Object.defineProperty(data,'_cascadeVersion',{value:s.updateTime?.toDate().toISOString()||null});return data;},
  scan:async(collection,after,limit,tx,options={})=>{let q=db.collection(collection);if(options.where){const filters=options.where.compositeFilter?.filters||[options.where];for(const f of filters){const v=f.fieldFilter;q=q.where(v.field.fieldPath,{EQUAL:'==',GREATER_THAN_OR_EQUAL:'>=',LESS_THAN_OR_EQUAL:'<='}[v.op],v.value.stringValue??new Date(v.value.timestampValue));}}if(options.timestamp)q=q.orderBy('timestamp');q=q.orderBy(require('firebase-admin/firestore').FieldPath.documentId()).limit(limit);if(after)q=options.timestamp?q.startAfter(new Date(after.time),after.id):q.startAfter(after);const s=await(tx?tx.get(q):q.get());return s.docs.map(d=>({id:d.id,data:d.data(),version:d.updateTime?.toDate().toISOString()||null}));},
  set:(path,value)=>({path,value}),delete:path=>({path,remove:true}),
- transaction:fn=>db.runTransaction(async tx=>{const {writes,result}=await fn(tx);for(const w of writes){if(w.remove)tx.delete(db.doc(w.path));else tx.set(db.doc(w.path),w.value);}return result;})
+ transaction:fn=>journalTransaction(db,async tx=>{const {writes,result}=await fn(tx);for(const w of writes){if(w.remove)tx.delete(db.doc(w.path));else tx.set(db.doc(w.path),w.value);}return result;})
 };
 store.deletion=new(require('./deletion').SessionDeletion)(deletionDb);
 const service=new GameService(store,{random,id,code});
@@ -89,7 +90,7 @@ async function applyDue(data){
  return service.due(data.roomId,data.handId,data.generation);
 }
 async function identity(req){const token=/^Bearer (.+)$/.exec(req.headers.authorization||'');if(!token)throw new Error('Sign in required');const decoded=await getAuth().verifyIdToken(token[1],true);const adminDoc=await db.doc('admins/'+decoded.uid).get();return{uid:decoded.uid,admin:decoded.admin===true||adminDoc.exists};}
-async function rate(uid){const ref=db.doc('onlineLimits/'+uid);await db.runTransaction(async tx=>{const s=await tx.get(ref),now=Date.now(),v=s.data(),same=v&&now-v.at<60000,count=same?v.count+1:1;if(count>90)throw new Error('Too many requests; try again shortly');tx.set(ref,{at:same?v.at:now,count});});}
+async function rate(uid){const ref=db.doc('onlineLimits/'+uid);await journalTransaction(db,async tx=>{const s=await tx.get(ref),now=Date.now(),v=s.data(),same=v&&now-v.at<60000,count=same?v.count+1:1;if(count>90)throw new Error('Too many requests; try again shortly');tx.set(ref,{at:same?v.at:now,count});});}
 exports.kaliApi=onRequest({region,cors:['https://hozefa111.github.io','https://patti-pro-a61d8.web.app','https://patti-pro-a61d8.firebaseapp.com','https://appassets.androidplatform.net',/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/],maxInstances:20},async(req,res)=>{
  try{if(req.method!=='POST'){res.status(405).json({error:'POST required'});return;}const who=await identity(req);await rate(who.uid);const body=req.body||{};let result;
   if(body.operation==='create')result=await service.create(who,body);
@@ -111,7 +112,7 @@ exports.kaliApi=onRequest({region,cors:['https://hozefa111.github.io','https://p
  }catch(e){res.status(400).json({error:e.message||'Action failed'});}
 });
 exports.kaliConsumeExchange=onRequest({region,cors:['https://appassets.androidplatform.net',/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/]},async(req,res)=>{
- try{if(req.method!=='POST')throw new Error('POST required');const value=req.body?.exchange;if(typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value))throw new Error('Invalid exchange');const ref=db.doc('onlineExchanges/'+crypto.createHash('sha256').update(value).digest('hex'));const uid=await db.runTransaction(async tx=>{const s=await tx.get(ref);if(!s.exists||s.data().expiresAt<Date.now())throw new Error('Exchange expired');tx.delete(ref);return s.data().uid;});res.json({token:await getAuth().createCustomToken(uid)});}catch(e){res.status(400).json({error:e.message});}
+ try{if(req.method!=='POST')throw new Error('POST required');const value=req.body?.exchange;if(typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value))throw new Error('Invalid exchange');const ref=db.doc('onlineExchanges/'+crypto.createHash('sha256').update(value).digest('hex'));const uid=await journalTransaction(db,async tx=>{const s=await tx.get(ref);if(!s.exists||s.data().expiresAt<Date.now())throw new Error('Exchange expired');tx.delete(ref);return s.data().uid;});res.json({token:await getAuth().createCustomToken(uid)});}catch(e){res.status(400).json({error:e.message});}
 });
 exports.kaliTurn=onTaskDispatched({region,retryConfig:{maxAttempts:5,minBackoffSeconds:1},rateLimits:{maxConcurrentDispatches:20}},async req=>{await applyDue(req.data);});
 exports.kaliSchedule=onDocumentWritten({region,document:'onlineState/{roomId}'},async event=>{

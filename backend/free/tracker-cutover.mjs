@@ -1,0 +1,11 @@
+// Server-only operator tool. Dry-run unless --apply; never touches tracker records.
+import {readFile} from 'node:fs/promises';
+import {Identity} from './identity.mjs';import {Firestore} from './firestore.mjs';
+const args=process.argv.slice(2),arg=name=>args[args.indexOf(name)+1],action=arg('--action'),project=arg('--project'),file=process.env.TRACKER_SERVICE_ACCOUNT_FILE;
+if(!['prepare','activate','rollback-readers','allow-legacy-writes'].includes(action)||!project||!file)throw Error('Specify --action, --project and TRACKER_SERVICE_ACCOUNT_FILE. Default is dry-run.');
+if(action==='activate'&&(!args.includes('--editors-updated')||!args.includes('--rules-verified')))throw Error('Activation requires confirmed editor updates and verified deployed journal rules');
+if(action==='allow-legacy-writes'&&!args.includes('--readers-fallback-confirmed'))throw Error('Confirm reader fallback before relaxing enforcement');
+const credential=JSON.parse(await readFile(file,'utf8'));if(credential.project_id!==project)throw Error('Project mismatch');const identity=new Identity({FIREBASE_PROJECT_ID:project,FIREBASE_SERVICE_ACCOUNT:JSON.stringify(credential)}),db=new Firestore(project,()=>identity.token());
+const change=old=>{const prior=old||{epoch:1,revision:0,mode:'prepare',enforced:false,eventId:'initial',paths:[]};if(action==='prepare')return prior;if(action==='activate'){if(prior.mode==='incremental'&&prior.enforced)return prior;return {...prior,epoch:Math.max(Date.now(),prior.epoch+1),mode:'incremental',enforced:true};}if(action==='rollback-readers')return {...prior,mode:'prepare'};if(prior.mode!=='prepare')throw Error('Switch readers to fallback before allowing legacy writes');return {...prior,enforced:false};};
+const current=await db.get('trackerSync/state'),proposed=change(current);console.log(JSON.stringify({project,action,apply:args.includes('--apply'),before:current?{mode:current.mode,enforced:current.enforced,epoch:current.epoch,revision:current.revision}:null,after:{mode:proposed.mode,enforced:proposed.enforced,epoch:proposed.epoch,revision:proposed.revision}}));
+if(args.includes('--apply'))await db.transaction(async tx=>{const before=await db.get('trackerSync/state',tx),after=change(before);return {writes:before&&JSON.stringify(before)===JSON.stringify(after)?[]:[db.set('trackerSync/state',after)],result:null};});

@@ -150,9 +150,11 @@ function safeToDate(val) {
     return new Date(val);
 }
 
-function initFirestoreListeners() {
+let legacyPlayerUnsub=null;
+function startLegacyPlayers() {
+    if(legacyPlayerUnsub)return;
     // Players collection
-    db.collection('players').orderBy('createdAt').onSnapshot(snap => {
+    legacyPlayerUnsub=trackerCollection('players').orderBy('createdAt').onSnapshot({includeMetadataChanges:true},snap => {
         players = snap.docs.map(doc => ({
             id: doc.id,
             ...doc.data()
@@ -163,17 +165,17 @@ function initFirestoreListeners() {
         console.error('Players listener error:', err);
     });
 
-    attachTrackerPreview();restoreTrackerSnapshot();
+    restoreTrackerSnapshot();
 }
 let trackerRequested=false,trackerRoundReady=false,trackerSessionReady=false,trackerHasCache=false,trackerPlayersReady=false,trackerUnsubs=[],trackerPreview=null,trackerPause=null,trackerGeneration=0,trackerDraftRounds=[],trackerDraftSessions=[];
 const trackerCacheDb=new Promise(resolve=>{const q=indexedDB.open('patti-public-tracker',1);q.onupgradeneeded=()=>q.result.createObjectStore('snapshots');q.onsuccess=()=>resolve(q.result);q.onerror=()=>resolve(null);});
-async function restoreTrackerSnapshot(){try{const cache=await trackerCacheDb;if(!cache)return;const q=cache.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{if(trackerRequested||!q.result)return;const v=q.result;if(!trackerPlayersReady&&!players.length&&Array.isArray(v.players))players=v.players;rounds=v.rounds.map(r=>({...r,timestamp:safeToDate(r.timestamp)}));sessions=v.sessions.map(r=>({...r,startTime:safeToDate(r.startTime),endTime:r.endTime?safeToDate(r.endTime):null}));trackerHasCache=true;renderCurrentView();};}catch{}}
-function saveTrackerSnapshot(){if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
-function attachTrackerPreview(){if(trackerPreview||trackerRequested||document.hidden)return;trackerPreview=db.collection('rounds').orderBy('timestamp','desc').limit(25).onSnapshot(()=>{if(!trackerRequested)renderCurrentView();},()=>{});}
+async function restoreTrackerSnapshot(){try{const cache=await trackerCacheDb;if(!cache)return;const q=cache.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{if(trackerRequested||!q.result)return;const v=q.result;if(v.journal)return;trackerLastSyncedAt=v.savedAt||0;if(!trackerPlayersReady&&!players.length&&Array.isArray(v.players))players=v.players;rounds=v.rounds.map(r=>({...r,timestamp:safeToDate(r.timestamp)}));sessions=v.sessions.map(r=>({...r,startTime:safeToDate(r.startTime),endTime:r.endTime?safeToDate(r.endTime):null}));trackerHasCache=true;renderCurrentView();};}catch{}}
+function saveTrackerSnapshot(){if(automaticTracker?.mode==='incremental')return;if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerLastSyncedAt=value.savedAt;trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
+function attachTrackerPreview(){if(trackerPreview||trackerRequested||document.hidden)return;trackerPreview=trackerCollection('rounds').orderBy('timestamp','desc').limit(25).onSnapshot(()=>{if(!trackerRequested)renderCurrentView();},()=>{});}
 function stopTrackerHistory(){trackerGeneration++;trackerUnsubs.forEach(f=>f());trackerUnsubs=[];trackerRequested=false;trackerRoundReady=false;trackerSessionReady=false;if(trackerPreview){trackerPreview();trackerPreview=null;}renderCurrentView();}
-window.loadTrackerHistory=function(){if(trackerRequested)return;trackerRequested=true;const generation=++trackerGeneration;if(trackerPreview){trackerPreview();trackerPreview=null;}
+function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=true;const generation=++trackerGeneration;if(trackerPreview){trackerPreview();trackerPreview=null;}
     // Rounds collection
-    trackerUnsubs.push(db.collection('rounds').orderBy('timestamp', 'desc').onSnapshot(snap => {
+    trackerUnsubs.push(trackerCollection('rounds').orderBy('timestamp', 'desc').onSnapshot({includeMetadataChanges:true},snap => {
         if(!trackerRequested||generation!==trackerGeneration)return;trackerRoundReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
         trackerDraftRounds = snap.docs.map(doc => {
             const data = doc.data();
@@ -195,7 +197,7 @@ window.loadTrackerHistory=function(){if(trackerRequested)return;trackerRequested
     // This is compatible with both web app and Flutter app
 
     // Sessions collection - also derives active session state
-    trackerUnsubs.push(db.collection('sessions').onSnapshot(snap => {
+    trackerUnsubs.push(trackerCollection('sessions').onSnapshot({includeMetadataChanges:true},snap => {
         if(!trackerRequested||generation!==trackerGeneration)return;trackerSessionReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
         trackerDraftSessions = snap.docs.map(doc => {
             const data = doc.data();
@@ -232,13 +234,36 @@ window.loadTrackerHistory=function(){if(trackerRequested)return;trackerRequested
     }));
 
 renderCurrentView();};
-document.addEventListener('visibilitychange',()=>{clearTimeout(trackerPause);if(document.hidden){if(trackerPreview){trackerPreview();trackerPreview=null;}trackerPause=setTimeout(stopTrackerHistory,60000);}else attachTrackerPreview();});
-function trackerGate(view){const complete=trackerRequested&&trackerRoundReady&&trackerSessionReady;let banner=view.querySelector('.tracker-history-status');if(complete){banner?.remove();for(const child of view.children)if(child.dataset.trackerHidden){child.hidden=false;delete child.dataset.trackerHidden;}return false;}
+document.addEventListener('visibilitychange',()=>{clearTimeout(trackerPause);if(document.hidden)trackerPause=setTimeout(()=>{stopTrackerHistory();legacyPlayerUnsub?.();legacyPlayerUnsub=null;automaticTracker?.stop();},60000);else{automaticTracker?.start();if(automaticTracker?.mode!=='incremental'){startLegacyPlayers();loadLegacyTrackerHistory();}}});
+function trackerGate(view){let stamp=view.querySelector('.tracker-sync-time');if(!stamp){stamp=document.createElement('p');stamp.className='tracker-sync-time';stamp.style.cssText='font-size:12px;color:var(--text-muted,#999)';view.prepend(stamp);}stamp.textContent=(trackerSyncStatus==='syncing'?'Syncing changes… · ':'')+(trackerLastSyncedAt?'Last synced '+new Date(trackerLastSyncedAt).toLocaleString('en-IN'):'Synchronizing automatically');const complete=trackerRequested&&trackerRoundReady&&trackerSessionReady;let banner=view.querySelector('.tracker-history-status');if(complete){banner?.remove();for(const child of view.children)if(child.dataset.trackerHidden){child.hidden=false;delete child.dataset.trackerHidden;}return false;}
  if(!banner){banner=document.createElement('section');banner.className='card tracker-history-status';view.prepend(banner);}
- banner.innerHTML='<h3>'+ (trackerRequested?'Loading complete tracker history…':trackerHasCache?'Saved lifetime snapshot':'Tracker history loads on demand')+'</h3><p>Play Online works independently. Load complete history to verify current scores and enable manual changes.</p>'+(!trackerRequested?'<button class="btn" onclick="loadTrackerHistory()">Load complete history</button>':'');
+ banner.innerHTML='<h3>'+ (trackerHasCache?'Saved scores · synchronizing':'Synchronizing your scores…')+'</h3><p>'+ (trackerSyncStatus==='quota'?'Firebase limit reached. Saved scores remain available; retry is automatic.':'Automatic background verification. Play Online remains independent.')+'</p><button class="btn" onclick="loadTrackerHistory()">Refresh</button>';
  if(!trackerHasCache||view.id==='view-round'){for(const child of view.children)if(child!==banner&&!child.classList.contains('online-launch')){child.hidden=true;child.dataset.trackerHidden='true';}return true;}
  return false;
 }
+
+let automaticTracker=null,trackerSyncStatus='syncing',trackerTransportMode=null,trackerLastSyncedAt=0;
+async function trackerCommit(ops){
+ if(automaticTracker?.mode==='incremental')await automaticTracker.refresh();
+ return TrackerSync.commit(db,ops,automaticTracker?.mode==='incremental'?automaticTracker.rows:undefined,automaticTracker?.mode==='incremental'?automaticTracker.revision:undefined);
+}
+function trackerDoc(ref){return new Proxy(ref,{get(target,key){if(['set','update','delete'].includes(key))return (data,options)=>trackerCommit([{type:key,ref:target,data,options}]);const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}
+function trackerCollection(name){const ref=db.collection(name);return new Proxy(ref,{get(target,key){if(key==='doc')return id=>trackerDoc(id?target.doc(id):target.doc());if(key==='add')return async data=>{const doc=target.doc();await trackerCommit([{type:'set',ref:doc,data}]);return doc;};const v=Reflect.get(target,key,target);return typeof v==='function'?v.bind(target):v;}});}
+function trackerBatch(){const ops=[],batch={};for(const type of ['set','update','delete'])batch[type]=(ref,data,options)=>{ops.push({type,ref:db.doc(ref.path),data,options});return batch;};batch.commit=()=>trackerCommit(ops);return batch;}
+function initFirestoreListeners(){
+ const cache={
+  async load(){const c=await trackerCacheDb;if(!c)return null;return new Promise(resolve=>{const q=c.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{const v=q.result;resolve(v?.journal?{...v.journal,rows:v.journal.rows.map(([p,d])=>[p,TrackerSync.unpack(d,db)])}:null);};q.onerror=()=>resolve(null);});},
+  async save(snapshot){const c=await trackerCacheDb;if(!c)throw Error('Local tracker cache unavailable');const data={...snapshot,rows:snapshot.rows.map(([p,d])=>[p,TrackerSync.pack(d)])},legacy={players:[],rounds:[],sessions:[],savedAt:snapshot.savedAt};for(const [path,value]of snapshot.rows){const [col,id]=path.split('/'),row={id,...value};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date();if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date();row.endTime=safeToDate(row.endTime);}legacy[col].push(row);}return new Promise((resolve,reject)=>{const tx=c.transaction('snapshots','readwrite');tx.objectStore('snapshots').put({...legacy,journal:data},'complete');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
+ };
+ automaticTracker=new TrackerSync.Client(db,cache,{
+  onMode(mode){const previous=trackerTransportMode;trackerTransportMode=mode;if(previous==='incremental'&&mode!=='incremental')stopTrackerHistory();if(mode==='incremental'){if(trackerUnsubs.length)stopTrackerHistory();legacyPlayerUnsub?.();legacyPlayerUnsub=null;}else{startLegacyPlayers();loadLegacyTrackerHistory();}},
+  onStatus(status){trackerSyncStatus=status;if(status!=='current'&&status!=='syncing'){trackerRoundReady=false;trackerSessionReady=false;}renderCurrentView();},
+  onData(snapshot,verified){trackerLastSyncedAt=snapshot.savedAt||0;const groups={players:[],rounds:[],sessions:[]};for(const [path,data]of snapshot.rows){const [col,id]=path.split('/');const row={id,...data};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date();if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date();row.endTime=safeToDate(row.endTime);}groups[col].push(row);}players=groups.players;rounds=groups.rounds;sessions=groups.sessions;trackerHasCache=true;trackerRequested=true;trackerPlayersReady=verified;trackerRoundReady=verified;trackerSessionReady=verified;firestoreReady=true;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])onlineParticipantNames.set(p.playerId,p.name);const active=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=active?{isActive:true,startTime:active.startTime,customName:active.sessionName,activeSessionId:active.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};renderCurrentView();}
+ });
+ restoreTrackerSnapshot();automaticTracker.init();
+}
+window.loadTrackerHistory=()=>automaticTracker?.refresh().catch(()=>{});
+window.addEventListener('online',()=>{if(automaticTracker?.retryAt<=Date.now()){automaticTracker.start();automaticTracker.refresh().catch(()=>{});}});
 
 // =============================================
 // NAVIGATION
@@ -850,7 +875,7 @@ window.executeStartSession = async function(saveCustomName) {
     const defaultName = 'Session ' + now.getDate() + ' ' + mos[now.getMonth()] + ' ' + now.getFullYear();
 
     try {
-        await db.collection('sessions').add({
+        await trackerCollection('sessions').add({
             sessionName: customName || defaultName,
             startTime: firebase.firestore.FieldValue.serverTimestamp(),
             endTime: null,
@@ -888,7 +913,7 @@ window.endSession = async function() {
     if (sessionRounds.length === 0) {
         showConfirm('No rounds played this session. End anyway?', 'End Session', async () => {
             try {
-                await db.collection('sessions').doc(sessionState.activeSessionId).update({
+                await trackerCollection('sessions').doc(sessionState.activeSessionId).update({
                     endTime: firebase.firestore.FieldValue.serverTimestamp()
                 });
                 showToast('Session ended');
@@ -1023,7 +1048,7 @@ window.endSession = async function() {
 
     // Save to Firestore - update existing session doc instead of creating new one
     try {
-        await db.collection('sessions').doc(sessionState.activeSessionId).update({
+        await trackerCollection('sessions').doc(sessionState.activeSessionId).update({
             ...sessionData,
             startTime: firebase.firestore.Timestamp.fromDate(sessionStart),
             endTime: firebase.firestore.FieldValue.serverTimestamp()
@@ -1073,21 +1098,21 @@ window.executeClearAllData = async function() {
         
         // 1. Delete all rounds
         console.log("Fetching rounds...");
-        const allRounds = await db.collection('rounds').get();
+        const allRounds = await trackerCollection('rounds').get();
         console.log(`Found ${allRounds.size} rounds to delete.`);
         for (const doc of allRounds.docs) {
             if (doc.data().source === 'online') continue;
-            await doc.ref.delete();
+            await trackerCommit([{type:'delete',ref:doc.ref}]);
         }
         console.log("Finished deleting rounds.");
 
         // 2. Delete all sessions
         console.log("Fetching sessions...");
-        const allSessions = await db.collection('sessions').get();
+        const allSessions = await trackerCollection('sessions').get();
         console.log(`Found ${allSessions.size} sessions to delete.`);
         for (const doc of allSessions.docs) {
             if (doc.data().source === 'online') continue;
-            await doc.ref.delete();
+            await trackerCommit([{type:'delete',ref:doc.ref}]);
         }
         console.log("Finished deleting sessions.");
 
@@ -1539,7 +1564,7 @@ async function saveRoundData() {
     saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
 
     try {
-        const docRef = await db.collection('rounds').add(roundDoc);
+        const docRef = await trackerCollection('rounds').add(roundDoc);
 
         // Store for share prompt
         lastSavedRound = { ...roundDoc, id: docRef.id, timestamp: new Date() };
@@ -2149,7 +2174,7 @@ window.saveSessionName = async function(id) {
     try {
         const session=sessions.find(s=>s.id===id);
         if(session?.source==='online')await onlineSessionHistory(session,'rename',newName);
-        else await db.collection('sessions').doc(id).update({ sessionName: newName });
+        else await trackerCollection('sessions').doc(id).update({ sessionName: newName });
         editingSessionId = null;
         renderPastSessions();
         showToast('Session name updated');
@@ -2474,7 +2499,7 @@ document.getElementById('add-player-form').addEventListener('submit', async (e) 
     }
 
     try {
-        await db.collection('players').add({
+        await trackerCollection('players').add({
             name: sanitizeHTML(name),
             active: true,
             createdAt: firebase.firestore.FieldValue.serverTimestamp()
@@ -2531,16 +2556,16 @@ window.savePlayerName = async function(pid) {
 
     try {
         // Update player document
-        await db.collection('players').doc(pid).update({ name: sanitizeHTML(newName) });
+        await trackerCollection('players').doc(pid).update({ name: sanitizeHTML(newName) });
 
         // Update name in all past rounds where this player appears
         const roundsWithPlayer = rounds.filter(r =>
             r.source !== 'online' && r.playerIds && r.playerIds.includes(pid)
         );
 
-        const batch = db.batch();
+        const batch = trackerBatch();
         roundsWithPlayer.forEach(r => {
-            const ref = db.collection('rounds').doc(r.id);
+            const ref = trackerCollection('rounds').doc(r.id);
             const updates = {};
             if (r.hukumId === pid) updates.hukumName = sanitizeHTML(newName);
             if (r.partnerIds && r.partnerIds.includes(pid)) {
@@ -2570,7 +2595,7 @@ window.savePlayerName = async function(pid) {
 // Bench Player
 window.benchPlayer = async function(pid) {
     try {
-        await db.collection('players').doc(pid).update({ active: false });
+        await trackerCollection('players').doc(pid).update({ active: false });
         showToast('Player benched \uD83C\uDF19');
     } catch (err) {
         console.error('Bench player error:', err);
@@ -2581,7 +2606,7 @@ window.benchPlayer = async function(pid) {
 // Restore Player
 window.restorePlayer = async function(pid) {
     try {
-        await db.collection('players').doc(pid).update({ active: true });
+        await trackerCollection('players').doc(pid).update({ active: true });
         showToast('Player restored! \u2705');
     } catch (err) {
         console.error('Restore player error:', err);
@@ -2595,7 +2620,7 @@ window.removePlayer = function(pid) {
     if (!p) return;
     showConfirm(`Remove "${p.name}" from the game?`, 'Remove', async () => {
         try {
-            await db.collection('players').doc(pid).delete();
+            await trackerCollection('players').doc(pid).delete();
             showToast(`${p.name} removed! \uD83D\uDDD1\uFE0F`);
         } catch (err) {
             console.error('Remove player error:', err);
@@ -2609,7 +2634,7 @@ window.deleteRound = function(roundId) {
     if (rounds.find(r => r.id === roundId)?.source === 'online') { showToast('Completed online hands are immutable.'); return; }
     showConfirm('Delete this round? Score changes will be reversed.', 'Delete', async () => {
         try {
-            await db.collection('rounds').doc(roundId).delete();
+            await trackerCollection('rounds').doc(roundId).delete();
             showToast('Round deleted! \u21A9\uFE0F');
         } catch (err) {
             console.error('Delete round error:', err);
@@ -2634,7 +2659,7 @@ async function checkMigration() {
         const parsed = JSON.parse(oldData);
         if (!parsed.totalPlayers || parsed.totalPlayers.length === 0) return;
 
-        const playersSnap = await db.collection('players').limit(1).get();
+        const playersSnap = await trackerCollection('players').limit(1).get();
         if (!playersSnap.empty) return;
 
         showMigrationBanner(parsed);
@@ -2663,11 +2688,11 @@ window.migrateToFirestore = async function() {
     showToast('Migrating data...');
 
     try {
-        const batch = db.batch();
+        const batch = trackerBatch();
         const playerIdMap = {};
 
         for (const p of oldData.totalPlayers) {
-            const ref = db.collection('players').doc();
+            const ref = trackerCollection('players').doc();
             playerIdMap[String(p.id)] = ref.id;
             batch.set(ref, {
                 name: p.name,
@@ -2680,17 +2705,17 @@ window.migrateToFirestore = async function() {
 
         if (oldData.history && oldData.history.length > 0) {
             const roundBatches = [];
-            let currentBatch = db.batch();
+            let currentBatch = trackerBatch();
             let count = 0;
 
             for (const round of oldData.history) {
                 if (count >= 490) {
                     roundBatches.push(currentBatch);
-                    currentBatch = db.batch();
+                    currentBatch = trackerBatch();
                     count = 0;
                 }
 
-                const ref = db.collection('rounds').doc();
+                const ref = trackerCollection('rounds').doc();
                 const roundDoc = {
                     type: 'hukum',
                     timestamp: round.date ? new Date(round.date) : (round.ts ? new Date(round.ts) : new Date()),
