@@ -5,7 +5,7 @@
   "workers_dev": true,
   "vars": {
     "FIREBASE_PROJECT_ID": "patti-pro-a61d8",
-    "ENABLE_CLOUDFLARE_V2": "false"
+    "ENABLE_CLOUDFLARE_V2": "true"
   },
   "durable_objects": {
     "bindings": [
