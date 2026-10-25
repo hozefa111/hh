@@ -1,3 +1,6 @@
+export {KaliLiveRoom} from './live-room.mjs';
+export {KaliLiveDirectory} from './live-router.mjs';
+import {liveRoute} from './live-router.mjs';
 import {DurableObject} from 'cloudflare:workers';
 import {failure} from './errors.mjs';
 import {Firestore,quotaError} from './firestore.mjs';
@@ -14,9 +17,10 @@ export default {async fetch(request,env){
  if(origin&&!origins.has(origin))return Response.json({error:'Origin not allowed'},{status:403,headers});
  if(origin)Object.assign(headers,{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Expose-Headers':'Server-Timing, X-Request-ID, Retry-After'});
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers});
- if(request.method!=='POST'||!['/kaliApi','/kaliConsumeExchange'].includes(new URL(request.url).pathname))return Response.json({error:'POST required'},{status:405,headers});
+ if(!(request.method==='GET'&&new URL(request.url).pathname==='/kaliSocket')&&(request.method!=='POST'||!['/kaliApi','/kaliConsumeExchange'].includes(new URL(request.url).pathname)))return Response.json({error:'POST required'},{status:405,headers});
  if(Number(request.headers.get('Content-Length')||0)>16384)return new Response(null,{status:413,headers});
- const response=await env.KALI_COORDINATOR.getByName('prototype-v1').fetch(request);
+ let response;try{response=await liveRoute(request,env)||await env.KALI_COORDINATOR.getByName('prototype-v1').fetch(request);}catch(e){response=failure(e);}
+ if(response.status===101)return new Response(null,{status:101,webSocket:response.webSocket,headers:response.headers});
  const output=new Response(response.body,response);for(const [k,v]of Object.entries(headers))output.headers.set(k,v);return output;
 }};
 export class KaliCoordinator extends DurableObject {

@@ -1,0 +1,56 @@
+import {test} from 'node:test';
+import A from 'node:assert/strict';
+import {readFile,mkdtemp,rm,writeFile,mkdir} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import {generateKeyPair,exportJWK,exportPKCS8,SignJWT} from 'jose';
+import {RestMemory} from './helpers/rest-memory.mjs';
+import R from '../../../functions/online/shared/engine.js';
+import B from '../../../functions/online/shared/bot.js';
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+async function wait(fn){const until=Date.now()+12000;while(!fn()){A(Date.now()<until,'state/receipt timeout');await sleep(5);}}
+for(const mode of [4,6])test(`${mode}-seat SQLite/WebSocket room survives Firestore outage with private projections, receipts and restart`,{timeout:150000},async()=>{
+ const memory=new RestMemory(),dir=await mkdtemp(join(tmpdir(),'kali-live-')),keys=await generateKeyPair('RS256',{extractable:true}),jwk=await exportJWK(keys.publicKey);Object.assign(jwk,{kid:'live-key',alg:'RS256',use:'sig'});
+ let blocked=false,dbCalls=0,dbReads=0,dbWrites=0;const calls=[],states=new Map(),frames=[],sockets=[],pings=[],tokens={};
+ for(let n=1;n<=mode;n++){memory.put('players/p'+n,{name:'P'+n});tokens['u'+n]=await new SignJWT({user_id:'u'+n,auth_time:Math.floor(Date.now()/1000),admin:n===1}).setProtectedHeader({alg:'RS256',kid:'live-key'}).setSubject('u'+n).setIssuer('https://securetoken.google.com/demo-three-patti').setAudience('demo-three-patti').setIssuedAt().setExpirationTime('1h').sign(keys.privateKey);}
+ const options={name:'live-test',modules:true,script:await readFile(new URL('../dist/worker.mjs',import.meta.url),'utf8'),compatibilityDate:'2026-03-01',resourcePersistencePath:dir,
+ durableObjects:{KALI_COORDINATOR:{className:'KaliCoordinator',useSQLite:true},KALI_LIVE_ROOMS:{className:'KaliLiveRoom',useSQLite:true},KALI_LIVE_DIRECTORY:{className:'KaliLiveDirectory',useSQLite:true}},
+ bindings:{ENABLE_CLOUDFLARE_V2:'true',FIREBASE_PROJECT_ID:'demo-three-patti',FIREBASE_SERVICE_ACCOUNT:JSON.stringify({project_id:'demo-three-patti',client_email:'live@test.iam.gserviceaccount.com',private_key:await exportPKCS8(keys.privateKey)})},
+ outboundService:async req=>{const url=new URL(req.url),text=req.method==='GET'?undefined:await req.text();
+  if(url.hostname==='www.googleapis.com')return Response.json({keys:[jwk]});
+  if(url.hostname==='oauth2.googleapis.com')return Response.json({access_token:'fake',expires_in:3600});
+  if(url.hostname==='identitytoolkit.googleapis.com'){const uid=JSON.parse(text).localId[0];return Response.json({users:[{localId:uid,validSince:'0'}]});}
+  if(url.hostname==='firestore.googleapis.com'){dbCalls++;if(blocked)return Response.json({error:{status:'UNAVAILABLE'}},{status:503});const body=text?JSON.parse(text):{};if(url.pathname.endsWith(':batchGet'))dbReads+=body.documents.length;if(url.pathname.endsWith(':commit'))dbWrites+=body.writes?.length||0;return memory.fetch(req.url,{method:req.method,body:text});}
+  throw Error('Unexpected outbound '+url.hostname);
+ }};
+ let mf=new Miniflare(convertV4MiniflareOptions(options));
+ const api=async(uid,body,expected=200)=>{const at=performance.now(),res=await mf.dispatchFetch('https://game/kaliApi',{method:'POST',headers:{Authorization:'Bearer '+tokens[uid],'Content-Type':'application/json',Origin:'https://hozefa111.github.io'},body:JSON.stringify({clientProtocol:2,...body})}),v=await res.json();A.equal(res.status,expected,JSON.stringify(v));calls.push({operation:body.action?.type||body.operation,ms:performance.now()-at});return v;};
+ let roomId;
+ const connect=async uid=>{const t=await api(uid,{operation:'socketTicket',roomId}),res=await mf.dispatchFetch('https://game/kaliSocket?roomId='+roomId,{headers:{Upgrade:'websocket',Origin:'https://hozefa111.github.io','Sec-WebSocket-Protocol':'kali.v2, ticket.'+t.ticket}});A.equal(res.status,101);const ws=res.webSocket;ws.accept();ws.addEventListener('message',e=>{if(e.data==='pong')return;const v=JSON.parse(e.data);if(v.room.id===roomId)states.set(uid,v);frames.push({uid,v});});sockets.push(ws);pings.push(setInterval(()=>{if(ws.readyState===1)ws.send('ping');},10000));await wait(()=>states.has(uid));return ws;};
+ const send=async(uid,action,extra={})=>{const h=states.get(uid).room.hand,r=states.get(uid).room,body={roomId,revision:r.revision,handId:h?.id,turnGeneration:h?.turnGeneration,commandId:crypto.randomUUID(),action,...extra},out=await api(uid,body);await wait(()=>states.get('u1').room.revision>=out.revision);return {out,body};};
+ try{
+ const created=await api('u1',{operation:'create',commandId:'create_live_123',playerId:'p1',mode,sessionName:'SQLite test'});roomId=created.roomId;A(roomId.startsWith('cf2_'));await connect('u1');
+ for(let n=2;n<=mode;n++){const uid='u'+n;await api(uid,{code:created.code,commandId:crypto.randomUUID(),action:{type:'join',playerId:'p'+n}});await connect(uid);await send(uid,{type:'claimSeat',seat:n});}
+ await api('u2',{code:created.code,commandId:'old_client_join',action:{type:'join',playerId:'p2'},clientProtocol:undefined},426);
+ await api('u1',{roomId,operation:'init',profiles:{p1:{name:'Forged'}}},400);
+ const sqlBefore=(await api('u1',{operation:'liveStats',roomId})).sqlite;const beforeCalls=dbCalls;blocked=true;
+ for(let n=2;n<=mode;n++)await send('u'+n,{type:'ready'});await send('u1',{type:'ready'});
+ let firstMove;while(R.active(states.get('u1').room)){
+  const h=states.get('u1').room.hand,uid=h.turn;await wait(()=>states.get(uid)?.room.revision>=states.get('u1').room.revision);
+  const own=states.get(uid).own;let a;if(h.phase==='auction')a={type:'bid',...(h.finalBid?{keep:true}:{pass:true})};else if(h.phase==='trump')a={type:'trump',suit:'H'};else if(h.phase==='partners')a={type:'partners',called:R.deck(mode,h.config).find(c=>!own.cards.includes(c)),...(mode===6?{direct:'u2'}:{})};else a={type:'play',card:R.legal(own.cards,h.trick)[0]};
+  if(h.phase==='playing'&&h.tricks.length===0&&h.trick.length===0){const start=dbCalls,{body}=await send(uid,a);firstMove=body;const receipts=await api(uid,body);A.equal(receipts.revision,states.get(uid).room.revision);A.equal(dbCalls,start,'live command + receipt retry uses zero Firestore calls');continue;}
+  await send(uid,a);
+ }
+ const result=states.get('u1').room;A.equal(Object.values(result.hand.captured).reduce((a,b)=>a+b),250);A.deepEqual(result.totals,Object.fromEntries(result.hand.seatMap.map(p=>[p.playerId,result.lastResult.scoreChanges[p.playerId]])));A(states.get('u1').pendingExports>0);
+ const sqlAfter=(await api('u1',{operation:'liveStats',roomId})).sqlite;const afterCompleteCalls=dbCalls;A(afterCompleteCalls-beforeCalls<=1,'only completion export attempted Firestore during outage');
+ for(const {uid,v}of frames){A(!('hands'in(v.room.hand||{})));A(!('deck'in(v.room.hand||{})));if(v.room.hand&&!v.room.hand.revealed)A.equal(v.room.hand.secret,null);A(v.own.cards.every(c=>R.deck(mode,v.room.config).includes(c)));A(!('own'in v.room));}
+ const current=result.revision;await api('u1',firstMove);await api('u1',{...firstMove,commandId:crypto.randomUUID()},400);A.equal(states.get('u1').room.revision,current);
+ // Ready and start another hand while the previous hand export is still unavailable.
+ for(let n=2;n<=mode;n++)await send('u'+n,{type:'ready'});await send('u1',{type:'ready'});A.equal(states.get('u1').room.hand.number,2);await send('u1',{type:'stop',void:true});
+ const saved=states.get('u1').room;blocked=false;await sleep(2400);await wait(()=>memory.get('rounds/online_'+result.hand.id));A.equal([...memory.docs.keys()].filter(k=>k==='rounds/online_'+result.hand.id).length,1);A.deepEqual(memory.get('rounds/online_'+result.hand.id).scoreChanges,result.lastResult.scoreChanges);
+ const originalRoom=roomId;const botRoom=await api('u1',{operation:'create',commandId:'bots_live_create',playerId:'p1',mode});roomId=botRoom.roomId;states.clear();await connect('u1');for(let seat=2;seat<=mode;seat++)await send('u1',{type:'bot',seat});blocked=true;const botDbStart=dbCalls;await send('u1',{type:'ready'});const botUntil=Date.now()+90000;while(states.get('u1').room.status==='playing'){A(Date.now()<botUntil,'bot alarms stalled');const r=states.get('u1').room,h=r.hand;if(h.turn==='u1'&&!r.paused)await send('u1',B.decide(r,'u1',states.get('u1').own.cards));else await sleep(30);}A.equal(Object.values(states.get('u1').room.hand.captured).reduce((a,b)=>a+b),250);A(dbCalls-botDbStart<=1,'bot moves use no Firestore before result export');await send('u1',{type:'stop'});blocked=false;roomId=originalRoom;
+ for(const ws of sockets)ws.close();await mf.dispose();options.bindings.ENABLE_CLOUDFLARE_V2='false';mf=new Miniflare(convertV4MiniflareOptions(options));states.clear();await connect('u1');A.deepEqual(states.get('u1').room.totals,saved.totals);A.equal(states.get('u1').room.hand.id,saved.hand.id);await api('u1',firstMove);await api('u1',{...firstMove,commandId:crypto.randomUUID()},400);
+ const sample=calls.filter(r=>['bid','play'].includes(r.operation)).map(r=>r.ms).sort((a,b)=>a-b);await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/hybrid-'+mode+'.json',JSON.stringify({scope:'Local actual SQLite Durable Objects/WebSockets; mocked identity and Firestore transport, no production traffic',mode,sqliteRowsReadPerHumanHand:sqlAfter.rowsRead-sqlBefore.rowsRead,sqliteRowsWrittenPerHumanHand:sqlAfter.rowsWritten-sqlBefore.rowsWritten,liveFirestoreCalls:0,exportOutageAttempts:afterCompleteCalls-beforeCalls,dbReads,dbWrites,commandSamples:sample.length,p50Ms:sample[Math.floor(sample.length*.5)],p95Ms:sample[Math.floor(sample.length*.95)],apiRequests:calls.length},null,2));
+ }finally{for(const timer of pings)clearInterval(timer);for(const ws of sockets)try{ws.close();}catch{}await mf.dispose();await rm(dir,{recursive:true,force:true});}
+});

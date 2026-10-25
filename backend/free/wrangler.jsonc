@@ -3,8 +3,42 @@
   "main": "dist/worker.mjs",
   "compatibility_date": "2026-03-01",
   "workers_dev": true,
-  "vars": {"FIREBASE_PROJECT_ID": "patti-pro-a61d8"},
-  "durable_objects": {"bindings": [{"name": "KALI_COORDINATOR", "class_name": "KaliCoordinator"}]},
-  "migrations": [{"tag": "v1", "new_sqlite_classes": ["KaliCoordinator"]}],
-  "observability": {"enabled": false}
+  "vars": {
+    "FIREBASE_PROJECT_ID": "patti-pro-a61d8",
+    "ENABLE_CLOUDFLARE_V2": "false"
+  },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "KALI_COORDINATOR",
+        "class_name": "KaliCoordinator"
+      },
+      {
+        "name": "KALI_LIVE_ROOMS",
+        "class_name": "KaliLiveRoom"
+      },
+      {
+        "name": "KALI_LIVE_DIRECTORY",
+        "class_name": "KaliLiveDirectory"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": [
+        "KaliCoordinator"
+      ]
+    },
+    {
+      "tag": "v2-live",
+      "new_sqlite_classes": [
+        "KaliLiveRoom",
+        "KaliLiveDirectory"
+      ]
+    }
+  ],
+  "observability": {
+    "enabled": false
+  }
 }
