@@ -2,7 +2,7 @@
 
 Firebase stays on **Spark**. Do not enable Blaze or deploy the Cloud Functions codebase for this variant. This Worker is an API adapter for the existing game, not another application, authentication environment or scoreboard.
 
-## Architecture
+## Legacy transport (existing rooms)
 
 - Cloudflare **Workers Free**, with a SQLite Durable Object coordinator and durable alarms. No paid resources are provisioned by this configuration.
 - Existing Firebase Auth identifies players. ID tokens are signature/audience/issuer checked, followed by account disable/revocation verification. Existing explicit administrator roles remain required.
@@ -14,11 +14,21 @@ Firebase stays on **Spark**. Do not enable Blaze or deploy the Cloud Functions c
 - A fresh presence check precedes automatic moves. If presence cannot be read, the alarm fails closed and retries; it does not invent a move.
 - Private hands and secret teams never enter Worker responses, RTDB presence, logs or persistent client storage. Firestore rules still protect own-hand projections even against room admins.
 
+## Hybrid transport (new rooms, feature-gated)
+
+`ENABLE_CLOUDFLARE_V2=false` preserves production creation. With the flag enabled, new immutable `cf2_` rooms live in one SQLite Durable Object each. The directory resolves `V2` room codes without Firestore. Existing legacy rooms keep the architecture above. Rollback changes creation only; never remove the new bindings/migration or stop existing v2 actors.
+
+- Atomically store canonical state, original command receipts, completed/voided history and ordered export outbox in SQLite. Hibernating sockets deliver only public state plus the recipient's own private hand. No live-room Firestore listeners or RTDB presence.
+- Completed rounds export with immutable receipt/session updates in one Firestore transaction. Lifetime totals still derive from existing rounds. Quota outages delay history, never live moves. Durable tombstones coordinate export/deletion; deletion stays pending until confirmed.
+- Firebase Auth/token revocation checks remain mandatory. New-room setup and previously uncached player profiles still need Firestore. Existing roster joins, discovery, reconnect and native identity exchange work during Firestore quota exhaustion. Socket authorization renews every four minutes, expires after five; real disconnect pauses the game.
+- Tracker startup uses a 25-round preview and labelled saved complete snapshot. Users explicitly load the full ledger before lifetime/manual operations become live; preview pages never calculate partial lifetime totals. Cached history is not claimed current.
+- Run focused `live-room.test.mjs` and `live-client.test.mjs` after build; the latter uses real Chromium controls. `live-export.emulator.test.mjs` requires local Firestore emulator. No production test data is generated.
+
 ## Free-tier limits
 
 Use a Cloudflare Free account; do not attach this prototype to Workers Paid. Free quotas are hard service limits, **not a promise of unlimited hosting**. Exceeding Cloudflare, Firestore or RTDB free quotas can interrupt the prototype; upgrading is not automatic here. Public prototype abuse can exhaust daily quotas. Keep the admission/admin workflow enabled.
 
-One serialized coordinator is deliberate for a small prototype. It is not a large-scale deployment design. Firebase Spark daily Firestore writes and RTDB monthly bandwidth remain limits. Sessions do not expire or stop at a score target; finished/voided records are retained.
+The legacy serialized coordinator remains for compatibility; v2 uses independent room actors. Firebase Spark daily Firestore writes and RTDB monthly bandwidth remain limits. Sessions do not expire or stop at a score target; finished/voided records are retained.
 
 Official limits: [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/), [Workers limits](https://developers.cloudflare.com/workers/platform/limits/), [Firestore free quota](https://firebase.google.com/docs/firestore/quotas).
 
@@ -34,7 +44,7 @@ Official limits: [Durable Objects pricing](https://developers.cloudflare.com/dur
 
 The existing `functions/online` deployment is retained as an optional future Blaze adapter; it must not be deployed as part of this free prototype.
 
-## Verified deployment status
+## Previously verified legacy deployment status
 
 The API is deployed at `https://three-patti-pro-online.three-patti-free-backend.workers.dev/`. Firebase stays on Spark; Cloud Functions/Tasks were not deployed. The service-account credential is a Worker secret, never a bundled client file. Restrictive Firestore/RTDB rules were deployed after backups, and the established tracker administrator retains access.
 

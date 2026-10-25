@@ -18,13 +18,13 @@ class SessionDeletion{
    }
   }return [...docs.values()].sort((a,b)=>a.id.localeCompare(b.id));
  }
- async describe(id,expectedName,tx){
-  const session=await this.db.get('sessions/'+id,tx),room=await this.db.get('onlineState/'+id,tx);
+ async describe(id,expectedName,tx,sessionOverride=null){
+  const session=sessionOverride||await this.db.get('sessions/'+id,tx),room=await this.db.get('onlineState/'+id,tx);
   if(!session)throw Error('Session not found');if(room?.historyDeleted)throw Error('Session was already deleted');
   if(!session.endTime||room&&room.status!=='stopped')throw Error('Stop the session before deleting its rounds and points');
   if(expectedName!==null&&expectedName!==session.sessionName)throw Error('Session name changed. Refresh and retry.');
   const snapshot={...session,id},rounds=await this.selected(snapshot,tx);
-  if(session.source!=='online'){
+  if(session.source!=='online'&&rounds.some(d=>!d.data.sessionId)){
    const others=(await this.all('sessions',tx)).filter(d=>d.id!==id&&d.data.source!=='online');
    if(rounds.some(d=>!d.data.sessionId&&others.some(s=>s.data.endTime&&contains(d.data,{...s.data,id:s.id}))))throw Error('Some older rounds match multiple sessions. Assign their session before deletion.');
   }
@@ -51,6 +51,7 @@ class SessionDeletion{
     const lock=await this.db.get('meta/sessionDeletionLock',tx);if(lock&&lock.sessionId!==id)throw Error('Another session deletion is finishing. Retry shortly.');
     const {snapshot,preview}=await this.describe(id,request.expectedName,tx);if(preview.previewToken!==request.previewToken)throw Error('Session rounds changed. Review the deletion again.');
     const writes=[this.db.set(path,{sessionId:id,generation:crypto.randomUUID(),actor:uid,status:'deleting',phase:'rounds',cursor:null,memberCursor:0,deletedRounds:0,snapshot,preview,startedAt:new Date()}),this.db.set('meta/sessionDeletionLock',{sessionId:id}),this.db.set('sessions/'+id,{...snapshot,status:'deleting'})];
+    if(snapshot.source==='online')writes.push(this.db.set('onlineTombstones/'+id,{roomId:id,at:new Date()}));
     return {writes,result:null};
    });
    return await this.step(id);

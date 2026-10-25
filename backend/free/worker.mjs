@@ -14,7 +14,7 @@ const random=n=>{const a=new Uint32Array(1),limit=Math.floor(0x100000000/n)*n;do
 const id=()=>crypto.randomUUID().replaceAll('-',''),code=()=>Array.from({length:8},()=>'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[random(32)]).join('');
 export default {async fetch(request,env){
  const origin=request.headers.get('Origin'),headers={'Cache-Control':'no-store','Vary':'Origin'};
- if(origin&&!origins.has(origin))return Response.json({error:'Origin not allowed'},{status:403,headers});
+ if(origin&&!origins.has(origin)&&!(env.FIREBASE_PROJECT_ID?.startsWith('demo-')&&/^http:\/\/(localhost|127\.0\.0\.1):[0-9]+$/.test(origin)))return Response.json({error:'Origin not allowed'},{status:403,headers});
  if(origin)Object.assign(headers,{'Access-Control-Allow-Origin':origin,'Access-Control-Allow-Headers':'Authorization, Content-Type','Access-Control-Allow-Methods':'POST, OPTIONS','Access-Control-Expose-Headers':'Server-Timing, X-Request-ID, Retry-After'});
  if(request.method==='OPTIONS')return new Response(null,{status:204,headers});
  if(!(request.method==='GET'&&new URL(request.url).pathname==='/kaliSocket')&&(request.method!=='POST'||!['/kaliApi','/kaliConsumeExchange'].includes(new URL(request.url).pathname)))return Response.json({error:'POST required'},{status:405,headers});
@@ -70,8 +70,8 @@ export class KaliCoordinator extends DurableObject {
  async rate(key){const now=Date.now(),k='limit:'+key;await this.storage.transaction(async tx=>{const old=await tx.get(k),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90)throw Error('Too many requests; try again shortly');await tx.put(k,{at:same?old.at:now,count});});await this.cleanupAlarm(now+60000);}
  async fetch(request){const timings=new Timings(),requestId=crypto.randomUUID();
   try{
-   const blocked=quotaError(this.env.FIREBASE_PROJECT_ID);if(blocked)throw blocked;
    const text=await request.text();if(text.length>16384)throw Error('Request too large');const body=JSON.parse(text);
+   const blocked=quotaError(this.env.FIREBASE_PROJECT_ID);if(blocked&&new URL(request.url).pathname!=='/kaliConsumeExchange'&&!['exchange','clock'].includes(body.operation))throw blocked;
    let result;
    if(new URL(request.url).pathname==='/kaliConsumeExchange'){
     if(typeof body.exchange!=='string'||!/^[a-f0-9]{64}$/.test(body.exchange))throw Error('Invalid exchange');

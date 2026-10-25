@@ -8,7 +8,8 @@ export async function exportResult(db,payload){
   const fingerprint=JSON.stringify(payload);if(done){if(done.fingerprint!==fingerprint)throw Error('Export receipt mismatch');return {writes:[],result:{ok:true}};}
   if(existing)throw Error('Round exists without matching export receipt');
   const writes=[];
-  if(round)writes.push(db.set('rounds/online_'+hand.handId,{...round,timestamp:new Date(round.timestamp)},true),db.set('onlineRooms/'+roomId+'/hands/'+hand.handId,hand,true));
+  if(round)writes.push(db.set('rounds/online_'+hand.handId,{...round,timestamp:new Date(round.timestamp)},true));
+  if(hand)writes.push(db.set('onlineRooms/'+roomId+'/hands/'+hand.handId,hand,true));
   if(!current||Number(current.exportRevision||0)<=revision)writes.push(db.set('sessions/'+roomId,{...session,startTime:new Date(session.startTime),endTime:session.endTime?new Date(session.endTime):null,exportRevision:revision}));
   writes.push(db.set(receipt,{fingerprint,revision,createdAt:new Date()},true));return {writes,result:{ok:true}};
  });
