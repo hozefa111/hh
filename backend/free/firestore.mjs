@@ -1,3 +1,4 @@
+import {changedTrackerPaths,journalWrites} from './tracker-journal.mjs';
 const quotaUntil=new Map();
 export function quotaError(project){const until=quotaUntil.get(project)||0;if(until<=Date.now())return null;const e=Error('Firebase database quota exhausted. Your rooms and scores are preserved. Try again after the quota recovers.');e.status=429;e.code='RESOURCE_EXHAUSTED';e.retryAfter=Math.ceil((until-Date.now())/1000);return e;}
 // Firestore REST keeps the existing Spark database and ledger; credentials stay server-only.
@@ -23,6 +24,10 @@ export class Firestore {
  constructor(project,token,fetcher=(...args)=>fetch(...args),{origin='https://firestore.googleapis.com',timings=null}={}){this.project=project;this.token=token;this.fetcher=fetcher;this.origin=origin;this.timings=timings;this.root=`projects/${project}/databases/(default)/documents`;}
  name(path){if(!path.split('/').every(s=>/^[a-zA-Z0-9_-]{1,240}$/.test(s)))throw Error('Invalid document path');return this.root+'/'+path;}
  async request(suffix,method='GET',body){
+  if(suffix.endsWith(':commit')&&body?.writes?.length&&changedTrackerPaths(body.writes,this.root).length){
+   if(!body.transaction)return this.transaction(async()=>({writes:body.writes,result:null}));
+   body={...body,writes:await journalWrites(this,body.transaction,body.writes)};
+  }
   const phase=suffix.endsWith(':commit')?'commit':suffix.endsWith(':beginTransaction')?'begin':suffix.endsWith(':rollback')?'rollback':'read';
   return this.timings?this.timings.measure(phase,()=>this.rawRequest(suffix,method,body)):this.rawRequest(suffix,method,body);
  }
