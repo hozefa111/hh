@@ -77,7 +77,7 @@ function updateAuthUI() {
 
     // Show/hide admin-only elements
     document.querySelectorAll('.admin-only').forEach(el => {
-        el.style.display = isAdminUser ? '' : 'none';
+        el.style.display = isAdminUser&&trackerRequested&&trackerRoundReady&&trackerSessionReady ? '' : 'none';
     });
 }
 
@@ -157,15 +157,25 @@ function initFirestoreListeners() {
             id: doc.id,
             ...doc.data()
         }));
-        firestoreReady = true;
+        firestoreReady = true;trackerPlayersReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;saveTrackerSnapshot();
         renderCurrentView();
     }, err => {
         console.error('Players listener error:', err);
     });
 
+    attachTrackerPreview();restoreTrackerSnapshot();
+}
+let trackerRequested=false,trackerRoundReady=false,trackerSessionReady=false,trackerHasCache=false,trackerPlayersReady=false,trackerUnsubs=[],trackerPreview=null,trackerPause=null,trackerGeneration=0,trackerDraftRounds=[],trackerDraftSessions=[];
+const trackerCacheDb=new Promise(resolve=>{const q=indexedDB.open('patti-public-tracker',1);q.onupgradeneeded=()=>q.result.createObjectStore('snapshots');q.onsuccess=()=>resolve(q.result);q.onerror=()=>resolve(null);});
+async function restoreTrackerSnapshot(){try{const cache=await trackerCacheDb;if(!cache)return;const q=cache.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{if(trackerRequested||!q.result)return;const v=q.result;if(!trackerPlayersReady&&!players.length&&Array.isArray(v.players))players=v.players;rounds=v.rounds.map(r=>({...r,timestamp:safeToDate(r.timestamp)}));sessions=v.sessions.map(r=>({...r,startTime:safeToDate(r.startTime),endTime:r.endTime?safeToDate(r.endTime):null}));trackerHasCache=true;renderCurrentView();};}catch{}}
+function saveTrackerSnapshot(){if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
+function attachTrackerPreview(){if(trackerPreview||trackerRequested||document.hidden)return;trackerPreview=db.collection('rounds').orderBy('timestamp','desc').limit(25).onSnapshot(()=>{if(!trackerRequested)renderCurrentView();},()=>{});}
+function stopTrackerHistory(){trackerGeneration++;trackerUnsubs.forEach(f=>f());trackerUnsubs=[];trackerRequested=false;trackerRoundReady=false;trackerSessionReady=false;if(trackerPreview){trackerPreview();trackerPreview=null;}renderCurrentView();}
+window.loadTrackerHistory=function(){if(trackerRequested)return;trackerRequested=true;const generation=++trackerGeneration;if(trackerPreview){trackerPreview();trackerPreview=null;}
     // Rounds collection
-    db.collection('rounds').orderBy('timestamp', 'desc').onSnapshot(snap => {
-        rounds = snap.docs.map(doc => {
+    trackerUnsubs.push(db.collection('rounds').orderBy('timestamp', 'desc').onSnapshot(snap => {
+        if(!trackerRequested||generation!==trackerGeneration)return;trackerRoundReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
+        trackerDraftRounds = snap.docs.map(doc => {
             const data = doc.data();
             return {
                 id: doc.id,
@@ -175,18 +185,19 @@ function initFirestoreListeners() {
         });
         onlineParticipantNames.clear();
         for (const r of rounds) for (const p of Array.isArray(r.participants) ? r.participants : []) if (!onlineParticipantNames.has(p.playerId)) onlineParticipantNames.set(p.playerId, p.name);
-        renderCurrentView();
+        saveTrackerSnapshot();renderCurrentView();
     }, err => {
-        console.error('Rounds listener error:', err);
-    });
+        trackerRoundReady=false;console.error('Rounds listener error:', err);renderCurrentView();
+    }));
 
     // Session state - derived from sessions collection (no meta/session dependency)
     // Active session = most recent session where endTime is null
     // This is compatible with both web app and Flutter app
 
     // Sessions collection - also derives active session state
-    db.collection('sessions').onSnapshot(snap => {
-        sessions = snap.docs.map(doc => {
+    trackerUnsubs.push(db.collection('sessions').onSnapshot(snap => {
+        if(!trackerRequested||generation!==trackerGeneration)return;trackerSessionReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
+        trackerDraftSessions = snap.docs.map(doc => {
             const data = doc.data();
             return {
                 id: doc.id,
@@ -215,10 +226,18 @@ function initFirestoreListeners() {
         } else {
             sessionState = { isActive: false, startTime: null, customName: null, activeSessionId: null };
         }
-        renderCurrentView();
+        saveTrackerSnapshot();renderCurrentView();
     }, err => {
-        console.error('Sessions listener error:', err);
-    });
+        trackerSessionReady=false;console.error('Sessions listener error:', err);renderCurrentView();
+    }));
+
+renderCurrentView();};
+document.addEventListener('visibilitychange',()=>{clearTimeout(trackerPause);if(document.hidden){if(trackerPreview){trackerPreview();trackerPreview=null;}trackerPause=setTimeout(stopTrackerHistory,60000);}else attachTrackerPreview();});
+function trackerGate(view){const complete=trackerRequested&&trackerRoundReady&&trackerSessionReady;let banner=view.querySelector('.tracker-history-status');if(complete){banner?.remove();for(const child of view.children)if(child.dataset.trackerHidden){child.hidden=false;delete child.dataset.trackerHidden;}return false;}
+ if(!banner){banner=document.createElement('section');banner.className='card tracker-history-status';view.prepend(banner);}
+ banner.innerHTML='<h3>'+ (trackerRequested?'Loading complete tracker history…':trackerHasCache?'Saved lifetime snapshot':'Tracker history loads on demand')+'</h3><p>Play Online works independently. Load complete history to verify current scores and enable manual changes.</p>'+(!trackerRequested?'<button class="btn" onclick="loadTrackerHistory()">Load complete history</button>':'');
+ if(!trackerHasCache||view.id==='view-round'){for(const child of view.children)if(child!==banner&&!child.classList.contains('online-launch')){child.hidden=true;child.dataset.trackerHidden='true';}return true;}
+ return false;
 }
 
 // =============================================
@@ -252,6 +271,7 @@ function renderCurrentView() {
     const viewEl = document.querySelector('.view.active');
     if (!viewEl) return;
 
+    if(trackerGate(viewEl)){updateAuthUI();return;}
     switch (viewEl.id) {
         case 'view-home': renderDashboard(); break;
         case 'view-players': renderPlayers(); break;
@@ -2114,7 +2134,7 @@ async function onlineSessionHistory(session,action,name,extra={}) {
     const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),25000);
     try {
         const token=await auth.currentUser.getIdToken();
-        const response=await fetch(endpoint+'kaliApi',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({operation:'sessionHistory',sessionId:session.id,action,name,expectedName:session.sessionName??null,commandId:crypto.randomUUID(),...extra}),signal:controller.signal});
+        const response=await fetch(endpoint+'kaliApi',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify({clientProtocol:2,operation:'sessionHistory',sessionId:session.id,action,name,expectedName:session.sessionName??null,commandId:crypto.randomUUID(),...extra}),signal:controller.signal});
         const result=await response.json();if(!response.ok)throw new Error(result.error||'Session update failed');return result;
     } finally {clearTimeout(timer);}
 }
