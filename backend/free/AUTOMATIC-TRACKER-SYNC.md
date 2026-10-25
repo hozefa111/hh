@@ -31,3 +31,11 @@ Example (credential file remains outside the repository; no passwords/tokens pri
     TRACKER_SERVICE_ACCOUNT_FILE=/secure/service-account.json node backend/free/tracker-cutover.mjs --project patti-pro-a61d8 --action activate --editors-updated --rules-verified --apply
 
 Without `--apply`, the tool reports the proposed public metadata change only. Actual production enforcement must wait for editor-update confirmation, as required by the approved plan.
+
+## Released status
+
+- Web/backend source stages: `3c70abf` (atomic server journal), `e9ff142` (SDK/web protocol, rules and cutover control). Android source: `ffeed2d` (sync/cache integration), `fa697a3` (quota-layout fix), `bea2fc9` (v2.7.17/code 38).
+- Signed [v2.7.17 APK](https://github.com/hozefa111/Apk/releases/download/three-patti-pro-v2.7.17/3-Patti-PRO-v2.7.17.apk) published after [40211431726](https://github.com/hozefa111/Apk/actions/runs/40211431726) passed: update over v2.7.16, retained data marker, actual old-format SQLite cache loaded and synthetic saved player visible, no manual Load button. Same package and certificate. SHA-256 `346dcc1a52aa74b37388bc0a8b977e1543503d43df9702f533a3efe4e4de8cf2` matches GitHub asset digest. Release JVM suite: 193 passed; release lint/build and 15 bundled hashes passed.
+- Worker `937ddd9a-f81f-4180-a356-efa9b6b69442` and additive rules deployed. Existing Cloudflare rooms remain enabled. Operator preparation created only protocol metadata; existing tracker records were not migrated/deleted. Latest read-only check: `mode=prepare`, `enforced=false`, `epoch=1`, `revision=0`.
+- Production **incremental enforcement remains OFF** until the owner confirms every admin/editor device is updated and old web editing tabs refreshed. Automatic full-sync fallback is live; the measured incremental read reduction is not yet a production claim.
+- The final browser fixture additionally passed active → prepare fallback with exact complete data, keeping all three public collections verified before enabling editor controls. Messaging/service-worker external imports were isolated in this tracker-specific fixture; push delivery was not tested.

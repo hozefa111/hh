@@ -77,7 +77,7 @@ function updateAuthUI() {
 
     // Show/hide admin-only elements
     document.querySelectorAll('.admin-only').forEach(el => {
-        el.style.display = isAdminUser&&trackerRequested&&trackerRoundReady&&trackerSessionReady ? '' : 'none';
+        el.style.display = isAdminUser&&trackerRequested&&trackerRoundReady&&trackerSessionReady&&trackerPlayersReady ? '' : 'none';
     });
 }
 
@@ -235,7 +235,7 @@ function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=
 
 renderCurrentView();};
 document.addEventListener('visibilitychange',()=>{clearTimeout(trackerPause);if(document.hidden)trackerPause=setTimeout(()=>{stopTrackerHistory();legacyPlayerUnsub?.();legacyPlayerUnsub=null;automaticTracker?.stop();},60000);else{automaticTracker?.start();if(automaticTracker?.mode!=='incremental'){startLegacyPlayers();loadLegacyTrackerHistory();}}});
-function trackerGate(view){let stamp=view.querySelector('.tracker-sync-time');if(!stamp){stamp=document.createElement('p');stamp.className='tracker-sync-time';stamp.style.cssText='font-size:12px;color:var(--text-muted,#999)';view.prepend(stamp);}stamp.textContent=(trackerSyncStatus==='syncing'?'Syncing changes… · ':'')+(trackerLastSyncedAt?'Last synced '+new Date(trackerLastSyncedAt).toLocaleString('en-IN'):'Synchronizing automatically');const complete=trackerRequested&&trackerRoundReady&&trackerSessionReady;let banner=view.querySelector('.tracker-history-status');if(complete){banner?.remove();for(const child of view.children)if(child.dataset.trackerHidden){child.hidden=false;delete child.dataset.trackerHidden;}return false;}
+function trackerGate(view){let stamp=view.querySelector('.tracker-sync-time');if(!stamp){stamp=document.createElement('p');stamp.className='tracker-sync-time';stamp.style.cssText='font-size:12px;color:var(--text-muted,#999)';view.prepend(stamp);}stamp.textContent=(trackerSyncStatus==='syncing'?'Syncing changes… · ':'')+(trackerLastSyncedAt?'Last synced '+new Date(trackerLastSyncedAt).toLocaleString('en-IN'):'Synchronizing automatically');const complete=trackerRequested&&trackerRoundReady&&trackerSessionReady&&trackerPlayersReady;let banner=view.querySelector('.tracker-history-status');if(complete){banner?.remove();for(const child of view.children)if(child.dataset.trackerHidden){child.hidden=false;delete child.dataset.trackerHidden;}return false;}
  if(!banner){banner=document.createElement('section');banner.className='card tracker-history-status';view.prepend(banner);}
  banner.innerHTML='<h3>'+ (trackerHasCache?'Saved scores · synchronizing':'Synchronizing your scores…')+'</h3><p>'+ (trackerSyncStatus==='quota'?'Firebase limit reached. Saved scores remain available; retry is automatic.':'Automatic background verification. Play Online remains independent.')+'</p><button class="btn" onclick="loadTrackerHistory()">Refresh</button>';
  if(!trackerHasCache||view.id==='view-round'){for(const child of view.children)if(child!==banner&&!child.classList.contains('online-launch')){child.hidden=true;child.dataset.trackerHidden='true';}return true;}
