@@ -26,7 +26,12 @@ class RestMemory {
   if(suffix===':beginTransaction')return Response.json({transaction:'memory'});
   if(suffix===':rollback')return Response.json({});
   if(suffix===':batchGet')return Response.json([...(body.newTransaction?[{transaction:'memory'}]:[]),...body.documents.map(name=>{const fields=this.docs.get(name.split('/documents/')[1]);return fields?{found:{name,fields}}:{missing:name};})]);
-  if(suffix.endsWith(':runQuery')){const q=body.structuredQuery,col=suffix.slice(1,-9),prefix=(col?col+'/':'')+q.from[0].collectionId+'/',after=q.startAt?.values[0].referenceValue.split('/documents/')[1];const docs=[...this.docs.entries()].filter(([k])=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')&&(!after||k>after)).sort(([a],[b])=>a<b?-1:a>b?1:0).slice(0,q.limit).map(([k,fields])=>({document:{name:'projects/demo/databases/(default)/documents/'+k,fields}}));return Response.json(docs);}
+  if(suffix.endsWith(':runQuery')){
+   const q=body.structuredQuery,col=suffix.slice(1,-9),prefix=(col?col+'/':'')+q.from[0].collectionId+'/',timestamp=q.orderBy?.[0].field.fieldPath==='timestamp',cursor=q.startAt?.values,after=cursor?.at(-1).referenceValue.split('/documents/')[1],afterTime=timestamp&&cursor?+new Date(cursor[0].timestampValue):null;
+   const matches=(data,w)=>{if(!w)return true;if(w.compositeFilter)return w.compositeFilter.filters.every(f=>matches(data,f));const f=w.fieldFilter,v=decode(f.value),actual=data[f.field.fieldPath];return f.op==='EQUAL'?actual===v:f.op==='GREATER_THAN_OR_EQUAL'?actual>=v:actual<=v;};
+   const rows=[...this.docs.entries()].filter(([k,fields])=>k.startsWith(prefix)&&!k.slice(prefix.length).includes('/')&&matches(decode({mapValue:{fields}}),q.where)).sort(([a,af],[b,bf])=>{if(timestamp){const delta=+decode({mapValue:{fields:af}}).timestamp-+decode({mapValue:{fields:bf}}).timestamp;if(delta)return delta;}return a<b?-1:a>b?1:0;}).filter(([k,fields])=>!after||timestamp?( !after||+decode({mapValue:{fields}}).timestamp>afterTime||+decode({mapValue:{fields}}).timestamp===afterTime&&k>after):k>after).slice(0,q.limit);
+   this.queryRows=(this.queryRows||0)+rows.length;return Response.json(rows.map(([k,fields])=>({document:{name:'projects/demo/databases/(default)/documents/'+k,fields}})));
+  }
   if(suffix===':commit'){
    for(const w of body.writes)if(w.currentDocument?.exists===false&&this.docs.has(w.update.name.split('/documents/')[1]))return Response.json({error:{status:'ALREADY_EXISTS'}},{status:409});
    for(const w of body.writes){const key=(w.update?.name||w.delete).split('/documents/')[1];if(w.delete)this.docs.delete(key);else this.docs.set(key,w.update.fields);}
@@ -162,4 +167,9 @@ test('membership summaries skip unchanged readiness but retain removal and sessi
  const ready=R.command(r,'guest',{type:'ready'},4,n=>n-1),writes=store.projection(r,ready),path=db.name('onlineMemberships/guest/rooms/'+r.id);assert(!writes.some(w=>w.update?.name===path));assert(writes.some(w=>w.update?.name===db.name('onlineRooms/'+r.id)),'public readiness remains live');
  const removed=R.command(r,'owner',{type:'remove',target:'guest'},5,n=>n-1);assert.equal(store.projection(r,removed).find(w=>w.update?.name===path).update.fields.status.stringValue,'Removed');
  const stopped=R.command(r,'owner',{type:'stop'},6,n=>n-1);assert.equal(store.projection(r,stopped).find(w=>w.update?.name===path).update.fields.status.stringValue,'stopped');
+});
+test('session-specific deletion avoids unrelated rounds; preview still detects edits',async()=>{
+ const f=await fixture(4);await f.send('admin',{type:'stop'});for(let i=0;i<3000;i++)f.memory.put('rounds/unrelated_'+i,{sessionId:'unrelated',timestamp:new Date(1),scoreChanges:{pa:1}});
+ for(let i=0;i<12;i++)f.memory.put('rounds/target_'+i,{sessionId:f.roomId,source:'online',scoreChanges:{pa:155}});
+ f.memory.queryRows=0;const {preview,result}=await cascade(f,f.roomId);assert.equal(preview.roundCount,12);assert.equal(result.deletedRounds,12);assert(f.memory.queryRows<=36,`only matching round rows read: ${f.memory.queryRows}`);assert(f.memory.get('rounds/unrelated_0'));
 });

@@ -32,3 +32,11 @@ test('real Firestore REST transactions save a complete hand, restore receipts an
   await service.due(roomId,r.hand.id,r.hand.turnGeneration);assert.equal((await db.get('sessions/'+roomId)).totalRounds,1);
  }finally{for(const path of created)await db.request('/'+path,'DELETE');}
 });
+test('indexed session deletion selects modern rounds and legacy time-window records in real Firestore',{skip:!process.env.FIRESTORE_EMULATOR_HOST},async()=>{
+ const db=new Firestore('demo-three-patti',async()=>'owner',fetch,{origin:'http://'+process.env.FIRESTORE_EMULATOR_HOST}),id='select_'+crypto.randomUUID().replaceAll('-',''),created=[];
+ const put=(path,data)=>{created.push(path);return db.set(path,data);};
+ try{const writes=[put('sessions/'+id,{sessionName:'Selected',startTime:new Date(100),endTime:new Date(200)}),put('rounds/'+id+'_modern',{sessionId:id,timestamp:new Date(900),scoreChanges:{p:155}}),put('rounds/'+id+'_legacy',{timestamp:new Date(150),scoreChanges:{p:-78}}),put('rounds/'+id+'_other',{timestamp:new Date(900),scoreChanges:{p:999}})];await db.request(':commit','POST',{writes});
+ const {SessionDeletion}=await import('../../../functions/online/deletion.js'),d=new SessionDeletion(db),p=await d.preview(id,null);assert.equal(p.roundCount,2);assert.equal(p.impacts[0].lifetimeChange,-77);
+ let result;do{result=await d.execute('owner',{sessionId:id,previewToken:p.previewToken,expectedName:null});}while(result.pending);assert.equal(result.deletedRounds,2);assert(await db.get('rounds/'+id+'_other'));
+ }finally{for(const p of created)await db.request('/'+p,'DELETE');}
+});

@@ -45,9 +45,11 @@ export class Firestore {
   const found=new Map(rows.filter(r=>r.found).map(r=>[r.found.name,r.found]));
   return documents.map(name=>{const doc=found.get(name);if(!doc)return null;const data=decode({mapValue:{fields:doc.fields||{}}});Object.defineProperty(data,'_cascadeVersion',{value:doc.updateTime||null});return data;});
  }
- async scan(collection,after,limit=100,transaction){
+ async scan(collection,after,limit=100,transaction,options={}){
   const structuredQuery={from:[{collectionId:collection.split('/').at(-1)}],orderBy:[{field:{fieldPath:'__name__'},direction:'ASCENDING'}],limit};
-  if(after)structuredQuery.startAt={before:false,values:[{referenceValue:this.name(collection+'/'+after)}]};
+  if(options.where)structuredQuery.where=options.where;
+  if(options.timestamp)structuredQuery.orderBy=[{field:{fieldPath:'timestamp'},direction:'ASCENDING'},...structuredQuery.orderBy];
+  if(after)structuredQuery.startAt={before:false,values:options.timestamp?[encode(new Date(after.time)),{referenceValue:this.name(collection+'/'+after.id)}]:[{referenceValue:this.name(collection+'/'+after)}]};
   const parent=collection.includes('/')?'/'+collection.slice(0,collection.lastIndexOf('/')):'';
   const rows=await this.request(parent+':runQuery','POST',{structuredQuery,...(transaction?{transaction}:{})});
   return rows.filter(r=>r.document).map(({document:d})=>({id:d.name.split('/').at(-1),data:decode({mapValue:{fields:d.fields||{}}}),version:d.updateTime||null}));

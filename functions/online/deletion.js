@@ -7,12 +7,23 @@ async function digest(v){const bytes=await crypto.subtle.digest('SHA-256',new Te
 class SessionDeletion{
  constructor(db,track=async()=>{}){this.db=db;this.track=track;}
  async all(collection,tx){const docs=[];let cursor=null;for(;;){const page=await this.db.scan(collection,cursor,100,tx);docs.push(...page);if(page.length<100)break;cursor=page.at(-1).id;}return docs;}
+ async selected(session,tx){
+  const docs=new Map(),equality={fieldFilter:{field:{fieldPath:'sessionId'},op:'EQUAL',value:{stringValue:session.id}}};
+  let cursor=null;for(;;){const page=await this.db.scan('rounds',cursor,100,tx,{where:equality});for(const d of page)docs.set(d.id,d);if(page.length<100)break;cursor=page.at(-1).id;}
+  if(session.source!=='online'){
+   const start=+new Date(validDate(session.startTime)),end=+new Date(validDate(session.endTime));
+   if(Number.isFinite(start)&&Number.isFinite(end)){
+    const where={compositeFilter:{op:'AND',filters:[{fieldFilter:{field:{fieldPath:'timestamp'},op:'GREATER_THAN_OR_EQUAL',value:{timestampValue:new Date(start).toISOString()}}},{fieldFilter:{field:{fieldPath:'timestamp'},op:'LESS_THAN_OR_EQUAL',value:{timestampValue:new Date(end).toISOString()}}}]}};
+    cursor=null;for(;;){const page=await this.db.scan('rounds',cursor,100,tx,{where,timestamp:true});for(const d of page)if(!d.data.sessionId&&contains(d.data,session))docs.set(d.id,d);if(page.length<100)break;const last=page.at(-1);cursor={id:last.id,time:+new Date(validDate(last.data.timestamp))};}
+   }
+  }return [...docs.values()].sort((a,b)=>a.id.localeCompare(b.id));
+ }
  async describe(id,expectedName,tx){
   const session=await this.db.get('sessions/'+id,tx),room=await this.db.get('onlineState/'+id,tx);
   if(!session)throw Error('Session not found');if(room?.historyDeleted)throw Error('Session was already deleted');
   if(!session.endTime||room&&room.status!=='stopped')throw Error('Stop the session before deleting its rounds and points');
   if(expectedName!==null&&expectedName!==session.sessionName)throw Error('Session name changed. Refresh and retry.');
-  const snapshot={...session,id},all=await this.all('rounds',tx),rounds=all.filter(d=>contains(d.data,snapshot));
+  const snapshot={...session,id},rounds=await this.selected(snapshot,tx);
   if(session.source!=='online'){
    const others=(await this.all('sessions',tx)).filter(d=>d.id!==id&&d.data.source!=='online');
    if(rounds.some(d=>!d.data.sessionId&&others.some(s=>s.data.endTime&&contains(d.data,{...s.data,id:s.id}))))throw Error('Some older rounds match multiple sessions. Assign their session before deletion.');
@@ -50,9 +61,12 @@ class SessionDeletion{
   if(job.status==='complete')return {writes:[],result:{ok:true,pending:false,deletedRounds:job.deletedRounds}};
   const next={...job},writes=[];
   if(job.phase==='rounds'){
-   const page=await db.scan('rounds',job.cursor,100,tx);
-   for(const d of page)if(contains(d.data,job.snapshot)){writes.push(db.set('sessionDeletionArchives/'+id+'_'+job.generation+'/rounds/'+d.id,d.data),db.delete('rounds/'+d.id));next.deletedRounds++;}
-   next.cursor=page.at(-1)?.id||job.cursor;if(page.length<100){next.phase='hands';next.cursor=null;}
+   const session={...job.snapshot,id},modern=job.roundPhase!=='legacy';
+   let options;if(modern)options={where:{fieldFilter:{field:{fieldPath:'sessionId'},op:'EQUAL',value:{stringValue:id}}}};
+   else options={timestamp:true,where:{compositeFilter:{op:'AND',filters:[{fieldFilter:{field:{fieldPath:'timestamp'},op:'GREATER_THAN_OR_EQUAL',value:{timestampValue:new Date(validDate(session.startTime)).toISOString()}}},{fieldFilter:{field:{fieldPath:'timestamp'},op:'LESS_THAN_OR_EQUAL',value:{timestampValue:new Date(validDate(session.endTime)).toISOString()}}}]}}};
+   const page=await db.scan('rounds',job.cursor,100,tx,options);
+   for(const d of page)if(contains(d.data,session)&&(modern||!d.data.sessionId)){writes.push(db.set('sessionDeletionArchives/'+id+'_'+job.generation+'/rounds/'+d.id,d.data),db.delete('rounds/'+d.id));next.deletedRounds++;}
+   const last=page.at(-1);next.cursor=last?(modern?last.id:{id:last.id,time:+new Date(validDate(last.data.timestamp))}):job.cursor;if(page.length<100){next.cursor=null;if(modern&&job.snapshot.source!=='online'&&Number.isFinite(+new Date(validDate(session.startTime)))&&Number.isFinite(+new Date(validDate(session.endTime))))next.roundPhase='legacy';else next.phase='hands';}
   }else if(job.phase==='hands'){
    const page=await db.scan('onlineRooms/'+id+'/hands',job.cursor,100,tx);
    for(const d of page)writes.push(db.set('sessionDeletionArchives/'+id+'_'+job.generation+'/hands/'+d.id,d.data),db.delete('onlineRooms/'+id+'/hands/'+d.id));

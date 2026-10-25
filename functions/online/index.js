@@ -60,7 +60,7 @@ const store={
 };
 const deletionDb={
  get:async(path,tx)=>{const s=await(tx?tx.get(db.doc(path)):db.doc(path).get());if(!s.exists)return null;const data=s.data();Object.defineProperty(data,'_cascadeVersion',{value:s.updateTime?.toDate().toISOString()||null});return data;},
- scan:async(collection,after,limit,tx)=>{let q=db.collection(collection).orderBy(require('firebase-admin/firestore').FieldPath.documentId()).limit(limit);if(after)q=q.startAfter(after);const s=await(tx?tx.get(q):q.get());return s.docs.map(d=>({id:d.id,data:d.data(),version:d.updateTime?.toDate().toISOString()||null}));},
+ scan:async(collection,after,limit,tx,options={})=>{let q=db.collection(collection);if(options.where){const filters=options.where.compositeFilter?.filters||[options.where];for(const f of filters){const v=f.fieldFilter;q=q.where(v.field.fieldPath,{EQUAL:'==',GREATER_THAN_OR_EQUAL:'>=',LESS_THAN_OR_EQUAL:'<='}[v.op],v.value.stringValue??new Date(v.value.timestampValue));}}if(options.timestamp)q=q.orderBy('timestamp');q=q.orderBy(require('firebase-admin/firestore').FieldPath.documentId()).limit(limit);if(after)q=options.timestamp?q.startAfter(new Date(after.time),after.id):q.startAfter(after);const s=await(tx?tx.get(q):q.get());return s.docs.map(d=>({id:d.id,data:d.data(),version:d.updateTime?.toDate().toISOString()||null}));},
  set:(path,value)=>({path,value}),delete:path=>({path,remove:true}),
  transaction:fn=>db.runTransaction(async tx=>{const {writes,result}=await fn(tx);for(const w of writes){if(w.remove)tx.delete(db.doc(w.path));else tx.set(db.doc(w.path),w.value);}return result;})
 };
