@@ -387,7 +387,7 @@ async function attachCloudRoom(id){
 async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;roomPendingExports=0;uncertainCommand=restorePending(id);recoveryAttempts=0;
  if(isCloudRoom(id)){membershipUnsub?.();membershipUnsub=null;await attachCloudRoom(id);return;}
  syncLegacyMemberships();
- unsubs.push(db.doc('onlineRooms/'+id).onSnapshot(s=>{if(subscribedRoomId!==id)return;if(!s.metadata.hasPendingWrites&&!s.metadata.isFromCache&&s.exists)speedSnapshot(id,s.data().revision);if(!s.exists){unavailableRoom(id);return;}loadingRoom=false;receiveRoomSnapshot(s.data());},e=>roomReadError(id,e)));
+ unsubs.push(db.doc('onlineRooms/'+id).onSnapshot(s=>{if(subscribedRoomId!==id)return;if(!s.metadata.hasPendingWrites&&!s.metadata.fromCache&&s.exists)speedSnapshot(id,s.data().revision);if(!s.exists){if(s.metadata.fromCache||s.metadata.hasPendingWrites)return;unavailableRoom(id);return;}loadingRoom=false;receiveRoomSnapshot(s.data());},e=>roomReadError(id,e)));
  unsubs.push(db.doc('onlineRooms/'+id+'/private/'+uid()).onSnapshot(s=>{if(subscribedRoomId!==id)return;own=s.exists?s.data():{cards:[]};render();},e=>roomReadError(id,e)));
  unsubs.push(stopHistory);
  await attachPresence(id);localStorage.setItem('kaliRoom',id);

@@ -28,6 +28,6 @@ test('measured Firestore emulator subscription reads and full-hand writes before
   const replay={roomId:id,revision:r.revision,handId:r.hand.id,turnGeneration:r.hand.turnGeneration,commandId:crypto.randomUUID(),action:{type:'stop'}};await service.execute({uid:'u1'},replay);count=true;writes=0;await service.execute({uid:'u1'},replay);count=false;assert.equal(writes,0,'receipt retry never rewrites public room or scores');
  }
  assert.equal(row.before.committedWrites-row.after.committedWrites,mode-1);assert.equal(row.before.pointReads,row.after.pointReads);report.hands.push(row);}
- await mkdir('../../test-results/kali',{recursive:true});await writeFile('../../test-results/kali/firebase-usage-report.json',JSON.stringify(report,null,2));console.log(JSON.stringify(report));
+ await mkdir(new URL('../../../test-results/kali/',import.meta.url),{recursive:true});await writeFile(new URL('../../../test-results/kali/firebase-usage-report.json',import.meta.url),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
  }finally{count=false;await env.cleanup();}
 });

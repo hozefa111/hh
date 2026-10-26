@@ -1,4 +1,4 @@
-const {journalTransaction}=require('./tracker-journal');
+const {journalTransaction,createTrackerPlayer}=require('./tracker-journal');
 'use strict';
 const {onRequest}=require('firebase-functions/v2/https');
 const {onTaskDispatched}=require('firebase-functions/v2/tasks');
@@ -103,7 +103,7 @@ exports.kaliApi=onRequest({region,cors:['https://hozefa111.github.io','https://p
   }
   else if(body.operation==='presenceAccess'){await grantPresence(body.roomId,who.uid);result={ok:true};}
   else if(body.operation==='register'){
-   if(!who.admin)throw new Error('Admin access required');const name=String(body.name||'').trim();if(!name||name.length>60)throw new Error('Invalid name');const ref=db.collection('players').doc();await ref.set({name,active:true,createdAt:FieldValue.serverTimestamp()});result={playerId:ref.id};
+   if(!who.admin)throw new Error('Admin access required');const name=String(body.name||'').trim();if(!name||name.length>60)throw new Error('Invalid name');const ref=db.collection('players').doc();await createTrackerPlayer(db,ref,{name,active:true,createdAt:FieldValue.serverTimestamp()});result={playerId:ref.id};
   }else if(body.operation==='exchange'){
    // This endpoint is invoked by the native app, never through a Javascript interface.
    const secret=crypto.randomBytes(32).toString('hex'),hash=crypto.createHash('sha256').update(secret).digest('hex');await db.doc('onlineExchanges/'+hash).set({uid:who.uid,expiresAt:Date.now()+30000});result={exchange:secret};
