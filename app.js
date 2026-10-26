@@ -151,10 +151,13 @@ function safeToDate(val) {
 }
 
 let legacyPlayerUnsub=null;
+const legacyTrackerRows=new Map();
+function rememberLegacyRows(name,snap){for(const path of legacyTrackerRows.keys())if(path.startsWith(name+'/'))legacyTrackerRows.delete(path);for(const doc of snap.docs)legacyTrackerRows.set(name+'/'+doc.id,doc.data());}
 function startLegacyPlayers() {
     if(legacyPlayerUnsub)return;
     // Players collection
     legacyPlayerUnsub=trackerCollection('players').orderBy('createdAt').onSnapshot({includeMetadataChanges:true},snap => {
+        rememberLegacyRows('players',snap);
         players = snap.docs.map(doc => ({
             id: doc.id,
             ...doc.data()
@@ -177,6 +180,7 @@ function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=
     // Rounds collection
     trackerUnsubs.push(trackerCollection('rounds').orderBy('timestamp', 'desc').onSnapshot({includeMetadataChanges:true},snap => {
         if(!trackerRequested||generation!==trackerGeneration)return;trackerRoundReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
+        rememberLegacyRows('rounds',snap);
         trackerDraftRounds = snap.docs.map(doc => {
             const data = doc.data();
             return {
@@ -199,6 +203,7 @@ function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=
     // Sessions collection - also derives active session state
     trackerUnsubs.push(trackerCollection('sessions').onSnapshot({includeMetadataChanges:true},snap => {
         if(!trackerRequested||generation!==trackerGeneration)return;trackerSessionReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
+        rememberLegacyRows('sessions',snap);
         trackerDraftSessions = snap.docs.map(doc => {
             const data = doc.data();
             return {
@@ -244,11 +249,12 @@ function trackerGate(view){let stamp=view.querySelector('.tracker-sync-time');if
 
 let automaticTracker=null,trackerSyncStatus='syncing',trackerTransportMode=null,trackerLastSyncedAt=0;
 async function trackerCommit(ops){
- const intentRows=automaticTracker?.rows,intentRevision=automaticTracker?.revision;
- if(automaticTracker?.mode==='incremental'){await automaticTracker.refresh();if(trackerSyncStatus!=='current'||!trackerPlayersReady||!trackerRoundReady||!trackerSessionReady)throw Error('Wait for complete verified synchronization before saving.');}
- const active=automaticTracker?.mode==='incremental',before=active?intentRows:undefined;
- const independentRound=active&&ops.every(o=>o.type==='set'&&o.ref.path.startsWith('rounds/')&&!before.has(o.ref.path));
- return TrackerSync.commit(db,ops,before,active&&!independentRound?intentRevision:undefined);
+ const wasIncremental=automaticTracker?.mode==='incremental';
+ const intentRows=new Map(wasIncremental?automaticTracker.rows:legacyTrackerRows),intentRevision=automaticTracker?.revision;
+ if(wasIncremental)await automaticTracker.refresh();
+ if(!trackerRequested||!trackerPlayersReady||!trackerRoundReady||!trackerSessionReady||wasIncremental&&trackerSyncStatus!=='current'||wasIncremental!==(automaticTracker?.mode==='incremental'))throw Error('Wait for complete verified synchronization before saving.');
+ const independentRound=ops.every(o=>o.type==='set'&&o.ref.path.startsWith('rounds/')&&!intentRows.has(o.ref.path));
+ return TrackerSync.commit(db,ops,intentRows,wasIncremental&&!independentRound?intentRevision:undefined);
 }
 function trackerDoc(ref){return new Proxy(ref,{get(target,key){if(['set','update','delete'].includes(key))return (data,options)=>trackerCommit([{type:key,ref:target,data,options}]);const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}
 function trackerCollection(name){const ref=db.collection(name);return new Proxy(ref,{get(target,key){if(key==='doc')return id=>trackerDoc(id?target.doc(id):target.doc());if(key==='add')return async data=>{const doc=target.doc();await trackerCommit([{type:'set',ref:doc,data}]);return doc;};const v=Reflect.get(target,key,target);return typeof v==='function'?v.bind(target):v;}});}
