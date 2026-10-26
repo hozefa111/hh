@@ -3,6 +3,9 @@ on:
   push:
     branches: [issue-27-sync-verification]
   workflow_dispatch:
+concurrency:
+  group: issue-27-sync-${{ github.ref }}
+  cancel-in-progress: true
 permissions:
   contents: read
 jobs:
@@ -19,7 +22,8 @@ jobs:
           distribution: temurin
           java-version: '17'
       - run: npm ci && npm ci --prefix backend/free && npm install -g firebase-tools@14.17.0
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
+        timeout-minutes: 5
       - name: Verify unit, browser, engine, exports and rules
         run: |
           mkdir -p test-results/issue-27
@@ -30,7 +34,7 @@ jobs:
           npm run check
           npm run build --prefix backend/free
           npm test --prefix backend/free > test-results/issue-27/backend.log 2>&1
-          firebase emulators:exec --project demo-three-patti --only auth,firestore 'node --test --test-concurrency=1 online/test/tracker-incremental.emulator.cjs online/test/tracker-cutover.emulator.cjs && node online/test/tracker-auto.browser.cjs && node --test --test-concurrency=1 backend/free/test/tracker-journal.emulator.test.mjs backend/free/test/live-export.emulator.test.mjs backend/free/test/emulator.test.mjs backend/free/test/usage.emulator.test.mjs' > test-results/issue-27/emulator.log 2>&1
+          firebase emulators:exec --project demo-three-patti --only auth,firestore 'node --test --test-concurrency=1 online/test/tracker-incremental.emulator.cjs online/test/tracker-cutover.emulator.cjs && node online/test/tracker-auto.browser.cjs && node online/test/room-cache.browser.cjs && node --test --test-concurrency=1 backend/free/test/tracker-journal.emulator.test.mjs backend/free/test/live-export.emulator.test.mjs backend/free/test/emulator.test.mjs backend/free/test/usage.emulator.test.mjs' > test-results/issue-27/emulator.log 2>&1
       - uses: actions/upload-artifact@v4
         if: always()
         with:

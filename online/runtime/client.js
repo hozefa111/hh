@@ -1352,8 +1352,9 @@ async function enter(id) {
   syncLegacyMemberships();
   unsubs.push(db.doc("onlineRooms/" + id).onSnapshot((s) => {
     if (subscribedRoomId !== id) return;
-    if (!s.metadata.hasPendingWrites && !s.metadata.isFromCache && s.exists) speedSnapshot(id, s.data().revision);
+    if (!s.metadata.hasPendingWrites && !s.metadata.fromCache && s.exists) speedSnapshot(id, s.data().revision);
     if (!s.exists) {
+      if (s.metadata.fromCache || s.metadata.hasPendingWrites) return;
       unavailableRoom(id);
       return;
     }
