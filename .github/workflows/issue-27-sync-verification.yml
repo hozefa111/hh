@@ -1,7 +1,7 @@
 name: Issue 27 incremental sync safety
 on:
   push:
-    branches: [issue-27-sync-verification]
+    branches: [issue-27-sync-verification, issue-27-history-completeness]
   workflow_dispatch:
 concurrency:
   group: issue-27-sync-${{ github.ref }}
