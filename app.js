@@ -150,13 +150,20 @@ function safeToDate(val) {
     return new Date(val);
 }
 
+// Complete ledger reads must also include legacy rows without optional dates.
+function sortTrackerRows(data){
+ const time=v=>+safeToDate(v)||0;
+ data.players.sort((a,b)=>time(a.createdAt)-time(b.createdAt)||String(a.id).localeCompare(String(b.id)));
+ data.rounds.sort((a,b)=>time(b.timestamp)-time(a.timestamp)||String(a.id).localeCompare(String(b.id)));
+ data.sessions.sort((a,b)=>(!a.endTime&&!b.endTime?time(b.startTime)-time(a.startTime):!a.endTime?-1:!b.endTime?1:time(b.endTime)-time(a.endTime))||String(a.id).localeCompare(String(b.id)));
+}
 let legacyPlayerUnsub=null;
 const legacyTrackerRows=new Map();
 function rememberLegacyRows(name,snap){for(const path of legacyTrackerRows.keys())if(path.startsWith(name+'/'))legacyTrackerRows.delete(path);for(const doc of snap.docs)legacyTrackerRows.set(name+'/'+doc.id,doc.data());}
 function startLegacyPlayers() {
     if(legacyPlayerUnsub)return;
     // Players collection
-    legacyPlayerUnsub=trackerCollection('players').orderBy('createdAt').onSnapshot({includeMetadataChanges:true},snap => {
+    legacyPlayerUnsub=trackerCollection('players').orderBy(firebase.firestore.FieldPath.documentId()).onSnapshot({includeMetadataChanges:true},snap => {
         rememberLegacyRows('players',snap);
         players = snap.docs.map(doc => ({
             id: doc.id,
@@ -173,12 +180,12 @@ function startLegacyPlayers() {
 let trackerRequested=false,trackerRoundReady=false,trackerSessionReady=false,trackerHasCache=false,trackerPlayersReady=false,trackerUnsubs=[],trackerPreview=null,trackerPause=null,trackerGeneration=0,trackerDraftRounds=[],trackerDraftSessions=[];
 const trackerCacheDb=new Promise(resolve=>{const q=indexedDB.open('patti-public-tracker',1);q.onupgradeneeded=()=>q.result.createObjectStore('snapshots');q.onsuccess=()=>resolve(q.result);q.onerror=()=>resolve(null);});
 async function restoreTrackerSnapshot(){try{const cache=await trackerCacheDb;if(!cache)return;const q=cache.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{if(trackerRequested||!q.result)return;const v=q.result;if(v.journal)return;trackerLastSyncedAt=v.savedAt||0;if(!trackerPlayersReady&&!players.length&&Array.isArray(v.players))players=v.players;rounds=v.rounds.map(r=>({...r,timestamp:safeToDate(r.timestamp)}));sessions=v.sessions.map(r=>({...r,startTime:safeToDate(r.startTime),endTime:r.endTime?safeToDate(r.endTime):null}));trackerHasCache=true;renderCurrentView();};}catch{}}
-function saveTrackerSnapshot(){if(automaticTracker?.mode==='incremental')return;if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerLastSyncedAt=value.savedAt;trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
+function saveTrackerSnapshot(){if(automaticTracker?.mode==='incremental')return;if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;sortTrackerRows({players,rounds,sessions});onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerLastSyncedAt=value.savedAt;trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
 function attachTrackerPreview(){if(trackerPreview||trackerRequested||document.hidden)return;trackerPreview=trackerCollection('rounds').orderBy('timestamp','desc').limit(25).onSnapshot(()=>{if(!trackerRequested)renderCurrentView();},()=>{});}
 function stopTrackerHistory(){trackerGeneration++;trackerUnsubs.forEach(f=>f());trackerUnsubs=[];trackerRequested=false;trackerRoundReady=false;trackerSessionReady=false;if(trackerPreview){trackerPreview();trackerPreview=null;}renderCurrentView();}
 function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=true;const generation=++trackerGeneration;if(trackerPreview){trackerPreview();trackerPreview=null;}
     // Rounds collection
-    trackerUnsubs.push(trackerCollection('rounds').orderBy('timestamp', 'desc').onSnapshot({includeMetadataChanges:true},snap => {
+    trackerUnsubs.push(trackerCollection('rounds').orderBy(firebase.firestore.FieldPath.documentId()).onSnapshot({includeMetadataChanges:true},snap => {
         if(!trackerRequested||generation!==trackerGeneration)return;trackerRoundReady=!snap.metadata.fromCache&&!snap.metadata.hasPendingWrites;
         rememberLegacyRows('rounds',snap);
         trackerDraftRounds = snap.docs.map(doc => {
@@ -186,7 +193,7 @@ function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=
             return {
                 id: doc.id,
                 ...data,
-                timestamp: data.timestamp ? safeToDate(data.timestamp) : new Date()
+                timestamp: data.timestamp ? safeToDate(data.timestamp) : new Date(0)
             };
         });
         onlineParticipantNames.clear();
@@ -209,30 +216,10 @@ function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=
             return {
                 id: doc.id,
                 ...data,
-                startTime: data.startTime ? safeToDate(data.startTime) : new Date(),
+                startTime: data.startTime ? safeToDate(data.startTime) : new Date(0),
                 endTime: data.endTime ? safeToDate(data.endTime) : null
             };
         });
-        // Sort: active sessions (endTime=null) first, then by endTime desc
-        sessions.sort((a, b) => {
-            if (!a.endTime && !b.endTime) return (b.startTime || 0) - (a.startTime || 0);
-            if (!a.endTime) return -1;
-            if (!b.endTime) return 1;
-            return b.endTime - a.endTime;
-        });
-
-        // Derive active session state from sessions list
-        const activeSession = sessions.find(s => !s.endTime && s.source !== 'online');
-        if (activeSession) {
-            sessionState = {
-                isActive: true,
-                startTime: activeSession.startTime || null,
-                customName: activeSession.sessionName || null,
-                activeSessionId: activeSession.id
-            };
-        } else {
-            sessionState = { isActive: false, startTime: null, customName: null, activeSessionId: null };
-        }
         saveTrackerSnapshot();renderCurrentView();
     }, err => {
         trackerSessionReady=false;console.error('Sessions listener error:', err);renderCurrentView();
@@ -262,12 +249,12 @@ function trackerBatch(){const ops=[],batch={};for(const type of ['set','update',
 function initFirestoreListeners(){
  const cache={
   async load(){const c=await trackerCacheDb;if(!c)return null;return new Promise(resolve=>{const q=c.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{const v=q.result;resolve(v?.journal?{...v.journal,rows:v.journal.rows.map(([p,d])=>[p,TrackerSync.unpack(d,db)])}:null);};q.onerror=()=>resolve(null);});},
-  async save(snapshot){const c=await trackerCacheDb;if(!c)throw Error('Local tracker cache unavailable');const data={...snapshot,rows:snapshot.rows.map(([p,d])=>[p,TrackerSync.pack(d)])},legacy={players:[],rounds:[],sessions:[],savedAt:snapshot.savedAt};for(const [path,value]of snapshot.rows){const [col,id]=path.split('/'),row={id,...value};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date();if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date();row.endTime=safeToDate(row.endTime);}legacy[col].push(row);}return new Promise((resolve,reject)=>{const tx=c.transaction('snapshots','readwrite');tx.objectStore('snapshots').put({...legacy,journal:data},'complete');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
+  async save(snapshot){const c=await trackerCacheDb;if(!c)throw Error('Local tracker cache unavailable');const data={...snapshot,rows:snapshot.rows.map(([p,d])=>[p,TrackerSync.pack(d)])},legacy={players:[],rounds:[],sessions:[],savedAt:snapshot.savedAt};for(const [path,value]of snapshot.rows){const [col,id]=path.split('/'),row={id,...value};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date(0);if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date(0);row.endTime=safeToDate(row.endTime);}legacy[col].push(row);}return new Promise((resolve,reject)=>{const tx=c.transaction('snapshots','readwrite');tx.objectStore('snapshots').put({...legacy,journal:data},'complete');tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);tx.onabort=()=>reject(tx.error);});}
  };
  automaticTracker=new TrackerSync.Client(db,cache,{
   onMode(mode){const previous=trackerTransportMode;trackerTransportMode=mode;if(previous==='incremental'&&mode!=='incremental')stopTrackerHistory();if(mode==='incremental'){if(trackerUnsubs.length)stopTrackerHistory();legacyPlayerUnsub?.();legacyPlayerUnsub=null;}else{startLegacyPlayers();loadLegacyTrackerHistory();}},
   onStatus(status){trackerSyncStatus=status;if(status!=='current'&&status!=='syncing'){trackerRoundReady=false;trackerSessionReady=false;}renderCurrentView();},
-  onData(snapshot,verified){trackerLastSyncedAt=snapshot.savedAt||0;const groups={players:[],rounds:[],sessions:[]};for(const [path,data]of snapshot.rows){const [col,id]=path.split('/');const row={id,...data};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date();if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date();row.endTime=safeToDate(row.endTime);}groups[col].push(row);}players=groups.players;rounds=groups.rounds;sessions=groups.sessions;trackerHasCache=true;trackerRequested=true;trackerPlayersReady=verified;trackerRoundReady=verified;trackerSessionReady=verified;firestoreReady=true;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])onlineParticipantNames.set(p.playerId,p.name);const active=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=active?{isActive:true,startTime:active.startTime,customName:active.sessionName,activeSessionId:active.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};renderCurrentView();}
+  onData(snapshot,verified){trackerLastSyncedAt=snapshot.savedAt||0;const groups={players:[],rounds:[],sessions:[]};for(const [path,data]of snapshot.rows){const [col,id]=path.split('/');const row={id,...data};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date(0);if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date(0);row.endTime=safeToDate(row.endTime);}groups[col].push(row);}sortTrackerRows(groups);players=groups.players;rounds=groups.rounds;sessions=groups.sessions;trackerHasCache=true;trackerRequested=true;trackerPlayersReady=verified;trackerRoundReady=verified;trackerSessionReady=verified;firestoreReady=true;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])onlineParticipantNames.set(p.playerId,p.name);const active=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=active?{isActive:true,startTime:active.startTime,customName:active.sessionName,activeSessionId:active.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};renderCurrentView();}
  });
  restoreTrackerSnapshot();automaticTracker.init();
 }
