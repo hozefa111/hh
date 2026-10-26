@@ -244,8 +244,11 @@ function trackerGate(view){let stamp=view.querySelector('.tracker-sync-time');if
 
 let automaticTracker=null,trackerSyncStatus='syncing',trackerTransportMode=null,trackerLastSyncedAt=0;
 async function trackerCommit(ops){
- if(automaticTracker?.mode==='incremental')await automaticTracker.refresh();
- return TrackerSync.commit(db,ops,automaticTracker?.mode==='incremental'?automaticTracker.rows:undefined,automaticTracker?.mode==='incremental'?automaticTracker.revision:undefined);
+ const intentRows=automaticTracker?.rows,intentRevision=automaticTracker?.revision;
+ if(automaticTracker?.mode==='incremental'){await automaticTracker.refresh();if(trackerSyncStatus!=='current'||!trackerPlayersReady||!trackerRoundReady||!trackerSessionReady)throw Error('Wait for complete verified synchronization before saving.');}
+ const active=automaticTracker?.mode==='incremental',before=active?intentRows:undefined;
+ const independentRound=active&&ops.every(o=>o.type==='set'&&o.ref.path.startsWith('rounds/')&&!before.has(o.ref.path));
+ return TrackerSync.commit(db,ops,before,active&&!independentRound?intentRevision:undefined);
 }
 function trackerDoc(ref){return new Proxy(ref,{get(target,key){if(['set','update','delete'].includes(key))return (data,options)=>trackerCommit([{type:key,ref:target,data,options}]);const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}
 function trackerCollection(name){const ref=db.collection(name);return new Proxy(ref,{get(target,key){if(key==='doc')return id=>trackerDoc(id?target.doc(id):target.doc());if(key==='add')return async data=>{const doc=target.doc();await trackerCommit([{type:'set',ref:doc,data}]);return doc;};const v=Reflect.get(target,key,target);return typeof v==='function'?v.bind(target):v;}});}
