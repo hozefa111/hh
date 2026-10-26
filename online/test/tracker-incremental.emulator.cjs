@@ -34,3 +34,23 @@ test('duplicate notifications and repeated refresh never double credit a record'
 test('rollback switches readers first and retains enforcement until explicitly relaxed',{timeout:30000},async()=>{
  await seed();await env.withSecurityRulesDisabled(ctx=>ctx.firestore().doc('trackerSync/state').update({mode:'prepare'}));await assertFails(db.doc('rounds/old_client').set({scoreChanges:{p:999}}));await Sync.commit(db,[{type:'update',ref:db.doc('rounds/r0000'),data:{scoreChanges:{p:700}}}]);await env.withSecurityRulesDisabled(ctx=>ctx.firestore().doc('trackerSync/state').update({enforced:false}));await db.doc('rounds/old_client').set({scoreChanges:{p:155}});
 });
+
+test('incremental readers fall back when journaling is not enforced', {timeout:30000},async()=>{
+ await seed();await env.withSecurityRulesDisabled(ctx=>ctx.firestore().doc('trackerSync/state').update({enforced:false}));
+ const r=reader();await r.c.refresh();A.equal(r.c.mode,'prepare');A.equal(r.c.revision,-1);A.equal(r.delivered.length,0);A.equal(r.m.counts.rows,0);
+ // An old client may write here; a journal-only reader would miss it indefinitely.
+ await db.doc('rounds/old_client').set({scoreChanges:{p:900}});
+ await env.withSecurityRulesDisabled(ctx=>ctx.firestore().doc('trackerSync/state').update({enforced:true,epoch:8}));
+ r.c.mode=(await r.c.getHead()).mode; // Emulate the authoritative head listener switching transport.
+ await r.c.refresh();A.equal(r.c.epoch,8);A.equal(total(r.c),156260);
+});
+
+test('stale timestamp preconditions retain nanosecond precision',{timeout:30000},async()=>{
+ await seed();const ref=db.doc('rounds/precise'),t=n=>new firebase.firestore.Timestamp(100,n);
+ await Sync.commit(db,[{type:'set',ref,data:{timestamp:t(123456000),scoreChanges:{p:180}}}]);
+ const before=new Map([['rounds/precise',(await ref.get()).data()]]);
+ await Sync.commit(db,[{type:'update',ref,data:{timestamp:t(123457000)}}]);
+ await A.rejects(Sync.commit(db,[{type:'update',ref,data:{timestamp:t(123456000),scoreChanges:{p:999}}}],before),/Record changed/);
+ A.equal((await ref.get()).data().scoreChanges.p,180);A.equal((await ref.get()).data().timestamp.nanoseconds,123457000);
+ A.equal(Sync.canonical(new Date(100123)),Sync.canonical(new firebase.firestore.Timestamp(100,123000000)));
+});

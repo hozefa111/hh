@@ -6,4 +6,5 @@ async function journalTransaction(db,fn){return db.runTransaction(async real=>{
  if(paths.size){if(paths.size>450)throw Error('Tracker batch too large');const state=db.doc('trackerSync/state'),saved=await real.get(state),head=saved.exists?saved.data():{mode:'prepare',epoch:1,revision:0,enforced:false},event=db.collection('trackerChanges').doc(),ordered=[...paths].sort(),revision=head.revision+1;journal={state,event,data:{epoch:head.epoch,revision,paths:ordered},head:{...head,revision,eventId:event.id,paths:ordered}};}
  for(const [name,args]of pending)real[name](...args);if(journal){real.create(journal.event,journal.data);real.set(journal.state,journal.head);}return result;
  });}
-module.exports={journalTransaction};
+async function createTrackerPlayer(db,ref,data){return journalTransaction(db,tx=>{tx.create(ref,data);});}
+module.exports={journalTransaction,createTrackerPlayer};
