@@ -5,7 +5,7 @@ const fs=require('node:fs'),A=require('node:assert/strict'),{performance}=requir
 const seeds=Number(process.env.KALI_BOT_SIM_SEEDS||128),startSeed=Number(process.env.KALI_BOT_SIM_START||1);A(Number.isInteger(seeds)&&seeds>0&&seeds<=2000);A(Number.isInteger(startSeed)&&startSeed>0&&startSeed<1000000);
 function random(seed){let x=seed>>>0;return n=>{x=(Math.imul(x,1664525)+1013904223)>>>0;return Math.floor(x/4294967296*n);};}
 let now=1000,illegal=0;const latencies={old:[],new:[]};
-function act(r,policy){const uid=r.hand.turn,cards=R.privateState(r,uid).cards,pub=R.publicState(r),t=performance.now(),action=policy.decide(pub,uid,cards);latencies[policy===Old?'old':'new'].push(performance.now()-t);
+function act(r,policy){if(r.hand.phase==='auction'&&r.hand.finalBid)return R.command(r,r.hand.turn,{type:'bid',keep:true,automatic:true},now++,n=>n-1);const uid=r.hand.turn,cards=R.privateState(r,uid).cards,pub=R.publicState(r),t=performance.now(),action=policy.decide(pub,uid,cards);latencies[policy===Old?'old':'new'].push(performance.now()-t);
  if(action.type==='play'&&!R.legal(cards,r.hand.trick).includes(action.card))illegal++;
  return R.command(r,uid,{...action,automatic:true},now++,n=>n-1);
 }
