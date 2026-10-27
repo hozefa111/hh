@@ -180,7 +180,7 @@ function startLegacyPlayers() {
 let trackerRequested=false,trackerRoundReady=false,trackerSessionReady=false,trackerHasCache=false,trackerPlayersReady=false,trackerUnsubs=[],trackerPreview=null,trackerPause=null,trackerGeneration=0,trackerDraftRounds=[],trackerDraftSessions=[];
 const trackerCacheDb=new Promise(resolve=>{const q=indexedDB.open('patti-public-tracker',1);q.onupgradeneeded=()=>q.result.createObjectStore('snapshots');q.onsuccess=()=>resolve(q.result);q.onerror=()=>resolve(null);});
 async function restoreTrackerSnapshot(){try{const cache=await trackerCacheDb;if(!cache)return;const q=cache.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{if(trackerRequested||!q.result)return;const v=q.result;if(v.journal)return;trackerLastSyncedAt=v.savedAt||0;if(!trackerPlayersReady&&!players.length&&Array.isArray(v.players))players=v.players;rounds=v.rounds.map(r=>({...r,timestamp:safeToDate(r.timestamp)}));sessions=v.sessions.map(r=>({...r,startTime:safeToDate(r.startTime),endTime:r.endTime?safeToDate(r.endTime):null}));trackerHasCache=true;renderCurrentView();};}catch{}}
-function saveTrackerSnapshot(){if(automaticTracker?.mode==='incremental')return;if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;sortTrackerRows({players,rounds,sessions});onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerLastSyncedAt=value.savedAt;trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
+function saveTrackerSnapshot(){if(automaticTracker?.mode==='incremental')return;if(!trackerRoundReady||!trackerSessionReady||!trackerPlayersReady)return;trackerHasCache=true;trackerCompleteLedger=true;rounds=trackerDraftRounds;sessions=trackerDraftSessions;sortTrackerRows({players,rounds,sessions});onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])if(!onlineParticipantNames.has(p.playerId))onlineParticipantNames.set(p.playerId,p.name);const current=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=current?{isActive:true,startTime:current.startTime||null,customName:current.sessionName||null,activeSessionId:current.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};const value={players,rounds,sessions,savedAt:Date.now()};trackerLastSyncedAt=value.savedAt;trackerCacheDb.then(cache=>{if(cache)cache.transaction('snapshots','readwrite').objectStore('snapshots').put(value,'complete');}).catch(()=>{});}
 function attachTrackerPreview(){if(trackerPreview||trackerRequested||document.hidden)return;trackerPreview=trackerCollection('rounds').orderBy('timestamp','desc').limit(25).onSnapshot(()=>{if(!trackerRequested)renderCurrentView();},()=>{});}
 function stopTrackerHistory(){trackerGeneration++;trackerUnsubs.forEach(f=>f());trackerUnsubs=[];trackerRequested=false;trackerRoundReady=false;trackerSessionReady=false;if(trackerPreview){trackerPreview();trackerPreview=null;}renderCurrentView();}
 function loadLegacyTrackerHistory(){if(trackerRequested)return;trackerRequested=true;const generation=++trackerGeneration;if(trackerPreview){trackerPreview();trackerPreview=null;}
@@ -234,18 +234,20 @@ function trackerGate(view){let stamp=view.querySelector('.tracker-sync-time');if
  return false;
 }
 
-let automaticTracker=null,trackerSyncStatus='syncing',trackerTransportMode=null,trackerLastSyncedAt=0;
-async function trackerCommit(ops){
+let automaticTracker=null,trackerSyncStatus='syncing',trackerTransportMode=null,trackerLastSyncedAt=0,trackerCompleteLedger=false;
+async function trackerCommit(ops,options){
  const wasIncremental=automaticTracker?.mode==='incremental';
  const intentRows=new Map(wasIncremental?automaticTracker.rows:legacyTrackerRows),intentRevision=automaticTracker?.revision;
  if(wasIncremental)await automaticTracker.refresh();
  if(!trackerRequested||!trackerPlayersReady||!trackerRoundReady||!trackerSessionReady||wasIncremental&&trackerSyncStatus!=='current'||wasIncremental!==(automaticTracker?.mode==='incremental'))throw Error('Wait for complete verified synchronization before saving.');
  const independentRound=ops.every(o=>o.type==='set'&&o.ref.path.startsWith('rounds/')&&!intentRows.has(o.ref.path));
- return TrackerSync.commit(db,ops,intentRows,wasIncremental&&!independentRound?intentRevision:undefined);
+ if(options?.owner&&currentUser?.uid!==options.owner)throw Error("Your account changed. Retry with the original account.");
+ return TrackerSync.commit(db,ops,intentRows,wasIncremental&&!independentRound?intentRevision:undefined,options);
 }
 function trackerDoc(ref){return new Proxy(ref,{get(target,key){if(['set','update','delete'].includes(key))return (data,options)=>trackerCommit([{type:key,ref:target,data,options}]);const value=Reflect.get(target,key,target);return typeof value==='function'?value.bind(target):value;}});}
-function trackerCollection(name){const ref=db.collection(name);return new Proxy(ref,{get(target,key){if(key==='doc')return id=>trackerDoc(id?target.doc(id):target.doc());if(key==='add')return async data=>{const doc=target.doc();await trackerCommit([{type:'set',ref:doc,data}]);return doc;};const v=Reflect.get(target,key,target);return typeof v==='function'?v.bind(target):v;}});}
+function trackerCollection(name){const ref=db.collection(name);return new Proxy(ref,{get(target,key){if(key==='doc')return id=>trackerDoc(id?target.doc(id):target.doc());if(key==='add')return async data=>{const doc=target.doc();await trackerCommit([{type:'set',ref:doc,data}],name==='sessions'&&ManualSessionGuard.active(doc.id,data)?{manualStart:true}:undefined);return doc;};const v=Reflect.get(target,key,target);return typeof v==='function'?v.bind(target):v;}});}
 function trackerBatch(){const ops=[],batch={};for(const type of ['set','update','delete'])batch[type]=(ref,data,options)=>{ops.push({type,ref:db.doc(ref.path),data,options});return batch;};batch.commit=()=>trackerCommit(ops);return batch;}
+function refreshTrackerStatusOnly(){const view=document.getElementById(activeViewId);if(view)trackerGate(view);}
 function initFirestoreListeners(){
  const cache={
   async load(){const c=await trackerCacheDb;if(!c)return null;return new Promise(resolve=>{const q=c.transaction('snapshots').objectStore('snapshots').get('complete');q.onsuccess=()=>{const v=q.result;resolve(v?.journal?{...v.journal,rows:v.journal.rows.map(([p,d])=>[p,TrackerSync.unpack(d,db)])}:null);};q.onerror=()=>resolve(null);});},
@@ -253,8 +255,9 @@ function initFirestoreListeners(){
  };
  automaticTracker=new TrackerSync.Client(db,cache,{
   onMode(mode){const previous=trackerTransportMode;trackerTransportMode=mode;if(previous==='incremental'&&mode!=='incremental')stopTrackerHistory();if(mode==='incremental'){if(trackerUnsubs.length)stopTrackerHistory();legacyPlayerUnsub?.();legacyPlayerUnsub=null;}else{startLegacyPlayers();loadLegacyTrackerHistory();}},
-  onStatus(status){trackerSyncStatus=status;if(status!=='current'&&status!=='syncing'){trackerRoundReady=false;trackerSessionReady=false;}renderCurrentView();},
-  onData(snapshot,verified){trackerLastSyncedAt=snapshot.savedAt||0;const groups={players:[],rounds:[],sessions:[]};for(const [path,data]of snapshot.rows){const [col,id]=path.split('/');const row={id,...data};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date(0);if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date(0);row.endTime=safeToDate(row.endTime);}groups[col].push(row);}sortTrackerRows(groups);players=groups.players;rounds=groups.rounds;sessions=groups.sessions;trackerHasCache=true;trackerRequested=true;trackerPlayersReady=verified;trackerRoundReady=verified;trackerSessionReady=verified;firestoreReady=true;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])onlineParticipantNames.set(p.playerId,p.name);const active=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=active?{isActive:true,startTime:active.startTime,customName:active.sessionName,activeSessionId:active.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};renderCurrentView();}
+  onStatus(status){trackerSyncStatus=status;if(status!=='current'&&status!=='syncing'){trackerRoundReady=false;trackerSessionReady=false;}if((status==='current'||status==='syncing')&&trackerPlayersReady&&trackerRoundReady&&trackerSessionReady)refreshTrackerStatusOnly();else renderCurrentView();},
+  onVerified(snapshot){const ready=trackerPlayersReady&&trackerRoundReady&&trackerSessionReady;trackerLastSyncedAt=snapshot.savedAt;trackerHasCache=trackerRequested=trackerPlayersReady=trackerRoundReady=trackerSessionReady=firestoreReady=true;if(ready)refreshTrackerStatusOnly();else renderCurrentView();},
+  onData(snapshot,verified){trackerCompleteLedger=verified||!!snapshot.integrity;trackerLastSyncedAt=snapshot.savedAt||0;const groups={players:[],rounds:[],sessions:[]};for(const [path,data]of snapshot.rows){const [col,id]=path.split('/');const row={id,...data};if(col==='rounds')row.timestamp=safeToDate(row.timestamp)||new Date(0);if(col==='sessions'){row.startTime=safeToDate(row.startTime)||new Date(0);row.endTime=safeToDate(row.endTime);}groups[col].push(row);}sortTrackerRows(groups);players=groups.players;rounds=groups.rounds;sessions=groups.sessions;trackerHasCache=true;trackerRequested=true;trackerPlayersReady=verified;trackerRoundReady=verified;trackerSessionReady=verified;firestoreReady=true;onlineParticipantNames.clear();for(const r of rounds)for(const p of r.participants||[])onlineParticipantNames.set(p.playerId,p.name);const active=sessions.find(s=>!s.endTime&&s.source!=='online');sessionState=active?{isActive:true,startTime:active.startTime,customName:active.sessionName,activeSessionId:active.id}:{isActive:false,startTime:null,customName:null,activeSessionId:null};renderCurrentView();}
  });
  restoreTrackerSnapshot();automaticTracker.init();
 }
@@ -477,9 +480,9 @@ function getFilteredGameRounds() {
 // PLAYER STATS COMPUTATION
 // =============================================
 
-function computeAllPlayerStats(filteredRounds) {
+function computeAllPlayerStats(filteredRounds,roster=players) {
     const stats = {};
-    players.forEach(p => {
+    roster.forEach(p => {
         stats[p.id] = {
             name: p.name,
             totalScore: 0,
@@ -891,6 +894,142 @@ window.executeStartSession = async function(saveCustomName) {
     }
 };
 
+function computeManualSessionSummary(sessionStart,sessionEnd,customName,sessionRounds,roster=players){
+    const summaryName=id=>roster.find(p=>p.id===id)?.name||getPlayerName(id);
+    // Compute session stats
+    const stats = computeAllPlayerStats(sessionRounds,roster);
+    const leaderboard = roster
+        .map(p => ({ id: p.id, name: p.name, score: (stats[p.id] || {}).totalScore || 0, roundsPlayed: (stats[p.id] || {}).roundsPlayed || 0 }))
+        .filter(x => x.roundsPlayed > 0)
+        .sort((a, b) => b.score - a.score)
+        .map((item, idx) => ({ ...item, rank: idx + 1 }));
+
+    const mvp = leaderboard.length > 0 ? leaderboard[0] : null;
+
+    // Best Hukum
+    let bestHukum = null;
+    let bestHukumRate = -1;
+    roster.forEach(p => {
+        const s = stats[p.id];
+        if (s && s.asHukum > 0) {
+            const rate = s.hukumWins / s.asHukum;
+            if (rate > bestHukumRate || (rate === bestHukumRate && s.asHukum > (bestHukum ? bestHukum.total : 0))) {
+                bestHukumRate = rate;
+                bestHukum = { name: p.name, winRate: Math.round(rate * 100), wins: s.hukumWins, total: s.asHukum };
+            }
+        }
+    });
+
+    // Biggest win/loss
+    let biggestWin = { name: '-', score: 0 };
+    let biggestLoss = { name: '-', score: 0 };
+    sessionRounds.forEach(round => {
+        if (!round.scoreChanges) return;
+        Object.entries(round.scoreChanges).forEach(([pid, change]) => {
+            const name = summaryName(pid);
+            if (change > biggestWin.score) { biggestWin = { name, score: change }; }
+            if (change < biggestLoss.score) { biggestLoss = { name, score: change }; }
+        });
+    });
+
+    // Streaks
+    const streaks = [];
+    roster.forEach(p => {
+        const streak = getWinningStreak(p.id, sessionRounds);
+        if (streak >= 2) streaks.push({ name: p.name, streak });
+    });
+    streaks.sort((a, b) => b.streak - a.streak);
+
+    // Badges Compute
+    const tempBadges = {
+        hukumKing: [], hotStreak: [], unlucky: [], sharpPartner: [], mvp: [], riskTaker: []
+    };
+
+    if (leaderboard.length > 0) {
+        const mvpScore = leaderboard[0].score;
+        tempBadges.mvp = leaderboard.filter(p => p.score === mvpScore).map(p => p.id);
+    }
+
+    let maxHukum = -1;
+    let maxLosses = -1;
+    roster.forEach(p => {
+        const s = stats[p.id];
+        if (!s) return;
+        if (s.asHukum > maxHukum) maxHukum = s.asHukum;
+        if (s.losses > maxLosses) maxLosses = s.losses;
+    });
+    if (maxHukum > 0) tempBadges.hukumKing = roster.filter(p => stats[p.id] && stats[p.id].asHukum === maxHukum).map(p => p.id);
+    if (maxLosses > 0) tempBadges.unlucky = roster.filter(p => stats[p.id] && stats[p.id].losses === maxLosses).map(p => p.id);
+
+    roster.forEach(p => {
+        const s = stats[p.id];
+        if (s && s.asPartner >= 3 && (s.partnerWins / s.asPartner) >= 0.8) {
+            tempBadges.sharpPartner.push(p.id);
+        }
+    });
+
+    let maxBid = -1;
+    sessionRounds.forEach(r => {
+        if (r.type !== 'settlement' && r.bid > maxBid) maxBid = r.bid;
+    });
+    if (maxBid > 0) {
+        sessionRounds.forEach(r => {
+            if (r.type !== 'settlement' && r.bid === maxBid && !tempBadges.riskTaker.includes(r.hukumId)) {
+                tempBadges.riskTaker.push(r.hukumId);
+            }
+        });
+    }
+
+    roster.forEach(p => {
+        let maxWins = 0;
+        let currentWins = 0;
+        sessionRounds.slice().reverse().forEach(r => {
+            if (r.type === 'settlement' || !r.scoreChanges || r.scoreChanges[p.id] === undefined) return;
+            const change = r.scoreChanges[p.id];
+            if (change > 0) {
+                currentWins++;
+                if (currentWins > maxWins) maxWins = currentWins;
+            } else if (change < 0) {
+                currentWins = 0;
+            }
+        });
+        if (maxWins >= 3) {
+            tempBadges.hotStreak.push(p.id);
+        }
+    });
+
+    const mos = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const defName = `Session [${sessionStart.getDate()} ${mos[sessionStart.getMonth()]} ${sessionStart.getFullYear()}]`;
+    const finalSessionName = customName ? customName : defName;
+
+    const sessionData = {
+        sessionName: finalSessionName,
+        startTime: sessionStart,
+        endTime: sessionEnd,
+        duration: sessionEnd.getTime() - sessionStart.getTime(),
+        totalRounds: sessionRounds.length,
+        leaderboard,
+        mvp: mvp ? { name: mvp.name, score: mvp.score } : null,
+        bestHukum,
+        biggestWin,
+        biggestLoss,
+        streaks,
+        badges: tempBadges
+    };
+
+    return sessionData;
+}
+let correctedSummarySource=null,correctedSummaryCache=new Map();
+function correctedManualSession(session){
+ if(!session.id||!trackerCompleteLedger||!session.endTime||session.source==='online'||String(session.id).startsWith('cf2_'))return session;
+ if(!correctedSummarySource||correctedSummarySource.players!==players||correctedSummarySource.rounds!==rounds||correctedSummarySource.sessions!==sessions){correctedSummarySource={players,rounds,sessions,groups:PattiSession.groupRounds(rounds,sessions)};correctedSummaryCache.clear();}
+ if(correctedSummaryCache.has(session.id))return correctedSummaryCache.get(session.id);
+ const selected=correctedSummarySource.groups.get(session.id)||[],roster=new Map(players.map(p=>[p.id,p]));
+ for(const p of session.leaderboard||[]){const id=p.id||p.playerId;if(id&&!roster.has(id))roster.set(id,{id,name:p.name});}
+ for(const r of selected){if(r.hukumId&&!roster.has(r.hukumId))roster.set(r.hukumId,{id:r.hukumId,name:r.hukumName||r.hukumId});for(const role of ['partner','nonPartner'])for(const [i,id]of (r[role+'Ids']||[]).entries())if(!roster.has(id))roster.set(id,{id,name:r[role+'Names']?.[i]||id});for(const id of Object.keys(r.scoreChanges||{}))if(!roster.has(id))roster.set(id,{id,name:id});}
+ const result={...session,...computeManualSessionSummary(safeToDate(session.startTime),safeToDate(session.endTime),session.sessionName,selected,[...roster.values()])};correctedSummaryCache.set(session.id,result);return result;
+}
+
 window.endSession = async function() {
     if (!sessionState.isActive || !sessionState.startTime) {
         showToast('No active session');
@@ -921,126 +1060,7 @@ window.endSession = async function() {
         return;
     }
 
-    // Compute session stats
-    const stats = computeAllPlayerStats(sessionRounds);
-    const leaderboard = players
-        .map(p => ({ id: p.id, name: p.name, score: (stats[p.id] || {}).totalScore || 0, roundsPlayed: (stats[p.id] || {}).roundsPlayed || 0 }))
-        .filter(x => x.roundsPlayed > 0)
-        .sort((a, b) => b.score - a.score)
-        .map((item, idx) => ({ ...item, rank: idx + 1 }));
-
-    const mvp = leaderboard.length > 0 ? leaderboard[0] : null;
-
-    // Best Hukum
-    let bestHukum = null;
-    let bestHukumRate = -1;
-    players.forEach(p => {
-        const s = stats[p.id];
-        if (s && s.asHukum > 0) {
-            const rate = s.hukumWins / s.asHukum;
-            if (rate > bestHukumRate || (rate === bestHukumRate && s.asHukum > (bestHukum ? bestHukum.total : 0))) {
-                bestHukumRate = rate;
-                bestHukum = { name: p.name, winRate: Math.round(rate * 100), wins: s.hukumWins, total: s.asHukum };
-            }
-        }
-    });
-
-    // Biggest win/loss
-    let biggestWin = { name: '-', score: 0 };
-    let biggestLoss = { name: '-', score: 0 };
-    sessionRounds.forEach(round => {
-        if (!round.scoreChanges) return;
-        Object.entries(round.scoreChanges).forEach(([pid, change]) => {
-            const name = getPlayerName(pid);
-            if (change > biggestWin.score) { biggestWin = { name, score: change }; }
-            if (change < biggestLoss.score) { biggestLoss = { name, score: change }; }
-        });
-    });
-
-    // Streaks
-    const streaks = [];
-    players.forEach(p => {
-        const streak = getWinningStreak(p.id, sessionRounds);
-        if (streak >= 2) streaks.push({ name: p.name, streak });
-    });
-    streaks.sort((a, b) => b.streak - a.streak);
-
-    // Badges Compute
-    const tempBadges = {
-        hukumKing: [], hotStreak: [], unlucky: [], sharpPartner: [], mvp: [], riskTaker: []
-    };
-
-    if (leaderboard.length > 0) {
-        const mvpScore = leaderboard[0].score;
-        tempBadges.mvp = leaderboard.filter(p => p.score === mvpScore).map(p => p.id);
-    }
-
-    let maxHukum = -1;
-    let maxLosses = -1;
-    players.forEach(p => {
-        const s = stats[p.id];
-        if (!s) return;
-        if (s.asHukum > maxHukum) maxHukum = s.asHukum;
-        if (s.losses > maxLosses) maxLosses = s.losses;
-    });
-    if (maxHukum > 0) tempBadges.hukumKing = players.filter(p => stats[p.id] && stats[p.id].asHukum === maxHukum).map(p => p.id);
-    if (maxLosses > 0) tempBadges.unlucky = players.filter(p => stats[p.id] && stats[p.id].losses === maxLosses).map(p => p.id);
-
-    players.forEach(p => {
-        const s = stats[p.id];
-        if (s && s.asPartner >= 3 && (s.partnerWins / s.asPartner) >= 0.8) {
-            tempBadges.sharpPartner.push(p.id);
-        }
-    });
-
-    let maxBid = -1;
-    sessionRounds.forEach(r => {
-        if (r.type !== 'settlement' && r.bid > maxBid) maxBid = r.bid;
-    });
-    if (maxBid > 0) {
-        sessionRounds.forEach(r => {
-            if (r.type !== 'settlement' && r.bid === maxBid && !tempBadges.riskTaker.includes(r.hukumId)) {
-                tempBadges.riskTaker.push(r.hukumId);
-            }
-        });
-    }
-
-    players.forEach(p => {
-        let maxWins = 0;
-        let currentWins = 0;
-        sessionRounds.slice().reverse().forEach(r => {
-            if (r.type === 'settlement' || !r.scoreChanges || r.scoreChanges[p.id] === undefined) return;
-            const change = r.scoreChanges[p.id];
-            if (change > 0) {
-                currentWins++;
-                if (currentWins > maxWins) maxWins = currentWins;
-            } else if (change < 0) {
-                currentWins = 0;
-            }
-        });
-        if (maxWins >= 3) {
-            tempBadges.hotStreak.push(p.id);
-        }
-    });
-
-    const mos = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    const defName = `Session [${sessionStart.getDate()} ${mos[sessionStart.getMonth()]} ${sessionStart.getFullYear()}]`;
-    const finalSessionName = sessionState.customName ? sessionState.customName : defName;
-
-    const sessionData = {
-        sessionName: finalSessionName,
-        startTime: sessionStart,
-        endTime: sessionEnd,
-        duration: sessionEnd.getTime() - sessionStart.getTime(),
-        totalRounds: sessionRounds.length,
-        leaderboard,
-        mvp: mvp ? { name: mvp.name, score: mvp.score } : null,
-        bestHukum,
-        biggestWin,
-        biggestLoss,
-        streaks,
-        badges: tempBadges
-    };
+    const sessionData=computeManualSessionSummary(sessionStart,sessionEnd,sessionState.customName,sessionRounds);
 
     // Save to Firestore - update existing session doc instead of creating new one
     try {
@@ -1132,6 +1152,7 @@ window.executeClearAllData = async function() {
 
 function sessionParticipantName(data, id) { return (data.leaderboard || []).find(p => p.id === id || p.playerId === id)?.name || getPlayerName(id); }
 function showSessionSummaryModal(data) {
+    data=correctedManualSession(data);
     const body = document.getElementById('session-summary-body');
     let html = '';
 
@@ -1295,6 +1316,8 @@ function renderRoundForm() {
     const container = document.getElementById('round-form-container');
     const saveBtn = document.getElementById('save-round-btn');
     const preview = document.getElementById('round-preview');
+    let pending;try{pending=pendingWebRound();}catch(e){container.textContent=e.message;saveBtn.disabled=true;return;}
+    if(pending)roundFormState=JSON.parse(JSON.stringify(pending.form));
     const allActive = getActivePlayers();
 
     // Initialize playingIds if not set (all active by default)
@@ -1307,7 +1330,7 @@ function renderRoundForm() {
 
     const playing = allActive.filter(p => roundFormState.playingIds.includes(p.id));
 
-    if (allActive.length < 3) {
+    if (allActive.length < 3 && !pending) {
         container.innerHTML = '<p class="empty-state"><i class="fa-solid fa-exclamation-triangle" style="font-size:2rem; display:block; margin-bottom:0.5rem; color:var(--gold-primary);"></i>Need at least 3 active players!<br><small>Go to Players tab to add more.</small></p>';
         saveBtn.disabled = true;
         preview.style.display = 'none';
@@ -1419,9 +1442,11 @@ function renderRoundForm() {
 
     container.innerHTML = html;
     updateRoundPreview();
+    if(pending||webRoundSaving)container.querySelectorAll('button,input,select').forEach(control=>control.disabled=true);
 }
 
 window.onBidChange = function(val) {
+    if(webRoundLocked())return;
     let v = parseInt(val);
     if (isNaN(v)) v = BID_MIN;
     v = Math.max(BID_MIN, Math.min(BID_MAX, v));
@@ -1431,12 +1456,14 @@ window.onBidChange = function(val) {
 };
 
 window.onHukumSelect = function(pid) {
+    if(webRoundLocked())return;
     roundFormState.hukum = pid;
     roundFormState.partners = roundFormState.partners.filter(id => id !== pid);
     renderRoundForm();
 };
 
 window.toggleRoundPlayer = function(pid) {
+    if(webRoundLocked())return;
     const idx = roundFormState.playingIds.indexOf(pid);
     if (idx >= 0) {
         roundFormState.playingIds.splice(idx, 1);
@@ -1450,6 +1477,7 @@ window.toggleRoundPlayer = function(pid) {
 };
 
 window.onPartnerToggle = function(pid) {
+    if(webRoundLocked())return;
     const idx = roundFormState.partners.indexOf(pid);
     if (idx >= 0) {
         roundFormState.partners.splice(idx, 1);
@@ -1460,6 +1488,7 @@ window.onPartnerToggle = function(pid) {
 };
 
 window.onResultSelect = function(result) {
+    if(webRoundLocked())return;
     roundFormState.result = result;
     document.querySelectorAll('.result-btn').forEach(btn => {
         btn.classList.remove('win-active', 'lose-active');
@@ -1475,6 +1504,8 @@ window.onResultSelect = function(result) {
 function updateRoundPreview() {
     const preview = document.getElementById('round-preview');
     const saveBtn = document.getElementById('save-round-btn');
+    let pending;try{pending=pendingWebRound();}catch(e){preview.textContent=e.message;preview.style.display='block';saveBtn.disabled=true;return;}
+    if(pending){preview.textContent='Unconfirmed save: original selections and round ID are preserved. Retry to verify or save that same round.';preview.style.display='block';saveBtn.disabled=webRoundSaving;saveBtn.textContent=webRoundSaving?'Saving…':'Retry unconfirmed round';saveBtn.onclick=saveRoundData;return;}
     const playing = getActivePlayers().filter(p => roundFormState.playingIds && roundFormState.playingIds.includes(p.id));
     const { bid, hukum, partners, result } = roundFormState;
 
@@ -1518,32 +1549,33 @@ function updateRoundPreview() {
 // SAVE ROUND TO FIRESTORE
 // =============================================
 
+let webRoundPending=null,webRoundSaving=false;
+function pendingWebRound(){
+ const owner=currentUser?.uid;if(!owner)return null;if(webRoundPending?.owner===owner)return webRoundPending;
+ const raw=sessionStorage.getItem('3patti-unconfirmed-round:'+owner);if(!raw)return null;
+ try{const intent=JSON.parse(raw);if(intent.owner!==owner||!/^[-a-zA-Z0-9_]{1,240}$/.test(intent.id)||intent.eventId!=='web2_round_'+intent.id||intent.data?.type!=='hukum'||!intent.form||!Number.isFinite(+new Date(intent.data.timestamp)))throw Error('Invalid unconfirmed round');return webRoundPending=intent;}catch{throw Error('Unconfirmed round could not be read. Verify History before clearing browser data.');}
+}
+function webRoundLocked(){try{return webRoundSaving||!!pendingWebRound();}catch{return true;}}
 async function saveRoundData() {
-    const saveBtn = document.getElementById('save-round-btn');
-    const active = getActivePlayers();
-    const { bid, hukum, partners, result } = roundFormState;
-
-    if (!bid || !hukum || partners.length === 0 || !result) {
-        showToast('Complete all fields first');
-        return;
-    }
-
-    const playing = getActivePlayers().filter(p => roundFormState.playingIds && roundFormState.playingIds.includes(p.id));
-    const activeIds = playing.map(p => p.id);
-    const nonPartnerIds = activeIds.filter(id => id !== hukum && !partners.includes(id));
-
-    if (nonPartnerIds.length < 1) {
-        showToast('Need at least one non-partner');
-        return;
-    }
-
-    const scoreChanges = calculateScoreChanges(activeIds, bid, hukum, partners, result);
-
-    const roundDoc = {
+ if(webRoundSaving)return;
+ const saveBtn=document.getElementById('save-round-btn');let intent;
+ try{
+  if(!currentUser||!isAdminUser)throw Error('Please sign in as an administrator.');
+  if(!navigator.onLine)throw Error('Offline. Reconnect before saving.');
+  intent=pendingWebRound();
+  if(!intent){
+    if(!trackerRequested||!trackerPlayersReady||!trackerRoundReady||!trackerSessionReady||automaticTracker?.mode==='incremental'&&trackerSyncStatus!=='current')throw Error('Wait for verified synchronization before saving.');
+    const {bid,hukum,partners,result}=roundFormState;
+    if(!bid||!hukum||!partners.length||!result)throw Error('Complete all fields first');
+    const playing=getActivePlayers().filter(p=>roundFormState.playingIds?.includes(p.id));
+    const activeIds=playing.map(p=>p.id),nonPartnerIds=activeIds.filter(id=>id!==hukum&&!partners.includes(id));
+    if(!activeIds.includes(hukum)||partners.some(id=>!activeIds.includes(id)||id===hukum)||!nonPartnerIds.length)throw Error('Review the participating players.');
+    const scoreChanges=calculateScoreChanges(activeIds,bid,hukum,partners,result);
+    const data = {
         type: 'hukum',
         source: 'manual',
         sessionId: sessionState.activeSessionId || null,
-        timestamp: firebase.firestore.FieldValue.serverTimestamp(),
+        timestamp: new Date().toISOString(),
         bid: bid,
         hukumId: hukum,
         hukumName: getPlayerName(hukum),
@@ -1556,29 +1588,23 @@ async function saveRoundData() {
         scoreChanges: scoreChanges
     };
 
-    saveBtn.disabled = true;
-    saveBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
-
-    try {
-        const docRef = await trackerCollection('rounds').add(roundDoc);
-
-        // Store for share prompt
-        lastSavedRound = { ...roundDoc, id: docRef.id, timestamp: new Date() };
-
-        // Reset form
-        roundFormState = { bid: 155, hukum: null, partners: [], result: null, playingIds: null };
-        showToast(result === 'win' ? 'Hukum Win! \uD83C\uDF89 Round saved!' : 'Hukum Lose! \uD83D\uDC80 Round saved!');
-
-        // Show share prompt
-        showRoundSharePrompt(lastSavedRound);
-
-    } catch (err) {
-        console.error('Save round error:', err);
-        showToast('Failed to save round. Try again.');
-    } finally {
-        saveBtn.disabled = false;
-        saveBtn.innerHTML = '<i class="fa-solid fa-check-circle"></i> Save Round';
-    }
+    const id=db.collection('rounds').doc().id;
+    intent={owner:currentUser.uid,id,eventId:'web2_round_'+id,data,form:JSON.parse(JSON.stringify(roundFormState))};
+    // One unconfirmed attempt, created only after verified online readiness.
+    // No background execution or offline save queue; retry is an explicit user action.
+    sessionStorage.setItem('3patti-unconfirmed-round:'+intent.owner,JSON.stringify(intent));webRoundPending=intent;
+  }
+  webRoundSaving=true;saveBtn.disabled=true;saveBtn.innerHTML='<i class="fa-solid fa-spinner fa-spin"></i> Saving...';
+  const roundDoc={...intent.data,timestamp:firebase.firestore.FieldValue.serverTimestamp()};
+  await trackerCommit([{type:'set',ref:db.doc('rounds/'+intent.id),data:roundDoc}],{eventId:intent.eventId,owner:intent.owner,manualRound:true});
+  sessionStorage.removeItem('3patti-unconfirmed-round:'+intent.owner);webRoundPending=null;
+  if(currentUser?.uid===intent.owner){
+   lastSavedRound={...roundDoc,id:intent.id,timestamp:safeToDate(automaticTracker?.rows?.get('rounds/'+intent.id)?.timestamp)||new Date()};
+   roundFormState={bid:155,hukum:null,partners:[],result:null,playingIds:intent.form.playingIds?.slice()||null};
+   showToast('Round saved successfully');showRoundSharePrompt(lastSavedRound);
+  }
+ }catch(err){console.error('Save round error:',err);showToast((intent?'Unconfirmed round kept. Retry uses the same ID. ':'')+err.message);}
+ finally{webRoundSaving=false;if(activeViewId==='view-round')renderRoundForm();else{saveBtn.disabled=false;saveBtn.innerHTML='<i class="fa-solid fa-check-circle"></i> Save Round';}}
 }
 
 function showRoundSharePrompt(round) {
@@ -2079,7 +2105,8 @@ function renderPastSessions() {
     }
 
     let html = '';
-    sessions.forEach(session => {
+    sessions.forEach(rawSession => {
+        const session=correctedManualSession(rawSession);
         const duration = session.duration ? formatDuration(session.duration) : formatDuration(session.endTime - session.startTime);
         const nameFallback = session.sessionName || formatDate(session.startTime);
 
