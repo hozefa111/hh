@@ -12,7 +12,7 @@ import metadata from '../../functions/online/metadata.js';
 import deletion from '../../functions/online/deletion.js';
 const random=n=>{const a=new Uint32Array(1),limit=Math.floor(0x100000000/n)*n;do{crypto.getRandomValues(a);}while(a[0]>=limit);return a[0]%n;};
 export class KaliLiveRoom extends DurableObject {
- constructor(ctx,env){super(ctx,env);this.ctx=ctx;this.env=env;this.store=new LiveStore(ctx.storage);this.queue=new KeyedQueue();this.exports=new KeyedQueue();this.alarmMetrics={reads:0,writes:0};this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.service=new serviceModule.GameService(this.store,{clock:Date.now,id:()=>crypto.randomUUID().replaceAll('-',''),random});this.flushing=false;
+ constructor(ctx,env){super(ctx,env);this.ctx=ctx;this.env=env;this.store=new LiveStore(ctx.storage);this.queue=new KeyedQueue();this.exports=new KeyedQueue();this.alarmMetrics={reads:0,writes:0,deleteSlices:0};this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.service=new serviceModule.GameService(this.store,{clock:Date.now,id:()=>crypto.randomUUID().replaceAll('-',''),random});this.flushing=false;
   ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping','pong'));
  }
  room(){return this.store.read('room');}
@@ -106,11 +106,19 @@ export class KaliLiveRoom extends DurableObject {
   const current=await this.publishedPreview(r,b,d);if(await deletion.digest(current)!==await deletion.digest(preview.published))throw Error('Exported history changed. Review deletion again.');
   this.store.write('deleted',{complete:false,at:Date.now(),total:r.completed});return {pending:true};
  }
- async drainDelete(){const r=this.room(),state=this.store.read('deleted');if(!state||state.complete||(this.store.read('deleteRetry')||0)>Date.now())return;
+ async drainDelete(){const r=this.room(),state=this.store.read('deleted');if(!state||state.complete||(this.store.read('deleteRetry')||0)>Date.now())return;this.alarmMetrics.deleteSlices++;
   try{
    await this.db.transaction(async tx=>{const [t,s,j]=await Promise.all([this.db.get('onlineTombstones/'+r.id,tx),this.db.get('sessions/'+r.id,tx),this.db.get('sessionDeletions/'+r.id,tx)]);const writes=[];if(!t)writes.push(this.db.set('onlineTombstones/'+r.id,{at:new Date(state.at),roomId:r.id},true));if(!s&&j?.status!=='complete')writes.push(this.db.set('sessions/'+r.id,metadata.sessionRecord(r)));else if(s&&!s.endTime&&j?.status!=='complete')writes.push(this.db.set('sessions/'+r.id,{...s,endTime:new Date(r.endedAt),status:'stopped'}));return {writes,result:null};});
    const d=new deletion.SessionDeletion(this.db),job=await this.db.get('sessionDeletions/'+r.id);let result;
+   const deadline=Date.now()+500;
    if(job)result=await d.step(r.id);else{const preview=await d.preview(r.id,null);result=await d.execute(r.admin,{sessionId:r.id,previewToken:preview.previewToken,expectedName:null});}
+   // Each step remains an independent durable transaction. Drain a small slice,
+   // rather than waiting for another alarm between empty cleanup phases.
+   for(let steps=1;steps<4&&result.pending;steps++){
+    // Let the event clock advance before enforcing the wall-time slice.
+    await new Promise(resolve=>setTimeout(resolve,0));if(Date.now()>=deadline)break;
+    result=await d.step(r.id);
+   }
    if(!result.pending)this.store.storage.transactionSync(()=>{this.store.write('deleted',{...state,complete:true});this.store.sql.exec('DELETE FROM live_outbox');this.store.sql.exec('DELETE FROM live_hands');});if(!result.pending)this.broadcast();
   }catch{this.store.write('deleteRetry',Date.now()+300000);}
  }
