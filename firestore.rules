@@ -6,30 +6,44 @@ service cloud.firestore {
   function noSessionDeletion(){return !exists(/databases/$(database)/documents/meta/sessionDeletionLock);}
   function roomMember(room){return signed() && exists(/databases/$(database)/documents/onlineRooms/$(room)/members/$(request.auth.uid));}
   function trackerState(){return /databases/$(database)/documents/trackerSync/state;}
+  function manualGuard(){return /databases/$(database)/documents/meta/manualSession;}
+  // Opt-in rollout: create the pointer only after all editor devices are updated.
+  // An older bulk writer is rejected before its FIRST atomic mutation, never halfway through restore.
+  function currentWriter(){return !exists(manualGuard()) || getAfter(trackerState()).data.eventId.matches('^(native2_|web2_).*');}
+  function manualActive(id,data){return data.get('source','manual')!='online' && !id.matches('^cf2_.*') && data.get('endTime',null)==null && !(data.get('status','active') in ['stopped','deleted','deleting']);}
+  function sessionPointer(id,data){return !exists(manualGuard()) || (manualActive(id,data)?getAfter(manualGuard()).data.sessionId==id:getAfter(manualGuard()).data.sessionId!=id);}
+  function roundPointer(data){return !exists(manualGuard()) || !getAfter(trackerState()).data.eventId.matches('^(native2_round_|web2_round_).*') || (data.get('sessionId',null)==getAfter(manualGuard()).data.sessionId && (getAfter(manualGuard()).data.sessionId==null || (existsAfter(/databases/$(database)/documents/sessions/$(getAfter(manualGuard()).data.sessionId)) && manualActive(getAfter(manualGuard()).data.sessionId,getAfter(/databases/$(database)/documents/sessions/$(getAfter(manualGuard()).data.sessionId)).data))));}
   function journaled(path){return !exists(trackerState()) || get(trackerState()).data.get('enforced',false)!=true || (getAfter(trackerState()).data.revision==get(trackerState()).data.revision+1 && path in getAfter(trackerState()).data.paths);}
   function journalEvent(data){return data.eventId is string && data.paths is list && data.paths.size()>0 && data.paths.size()<=450 && getAfter(/databases/$(database)/documents/trackerChanges/$(data.eventId)).data=={'revision':data.revision,'epoch':data.epoch,'paths':data.paths};}
   match /trackerSync/state {
    allow read: if true;
-   allow create: if admin() && request.resource.data.keys().hasOnly(['mode','epoch','revision','eventId','paths','enforced']) && request.resource.data.get('enforced',false)==false && request.resource.data.mode=='prepare' && request.resource.data.epoch==1 && request.resource.data.revision==1 && journalEvent(request.resource.data);
-   allow update: if admin() && request.resource.data.keys().hasOnly(resource.data.keys()) && request.resource.data.keys().hasAll(resource.data.keys()) && request.resource.data.get('enforced',false)==resource.data.get('enforced',false) && request.resource.data.mode==resource.data.mode && request.resource.data.epoch==resource.data.epoch && request.resource.data.revision==resource.data.revision+1 && journalEvent(request.resource.data);
+   allow create: if admin() && currentWriter() && request.resource.data.keys().hasOnly(['mode','epoch','revision','eventId','paths','enforced']) && request.resource.data.get('enforced',false)==false && request.resource.data.mode=='prepare' && request.resource.data.epoch==1 && request.resource.data.revision==1 && journalEvent(request.resource.data);
+   allow update: if admin() && currentWriter() && request.resource.data.keys().hasOnly(resource.data.keys()) && request.resource.data.keys().hasAll(resource.data.keys()) && request.resource.data.get('enforced',false)==resource.data.get('enforced',false) && request.resource.data.mode==resource.data.mode && request.resource.data.epoch==resource.data.epoch && request.resource.data.revision==resource.data.revision+1 && journalEvent(request.resource.data);
    allow delete: if false;
   }
   match /trackerChanges/{event} {
    allow read: if true;
-   allow create: if admin() && getAfter(trackerState()).data.eventId==event && request.resource.data=={'revision':getAfter(trackerState()).data.revision,'epoch':getAfter(trackerState()).data.epoch,'paths':getAfter(trackerState()).data.paths};
+   allow create: if admin() && currentWriter() && getAfter(trackerState()).data.eventId==event && request.resource.data=={'revision':getAfter(trackerState()).data.revision,'epoch':getAfter(trackerState()).data.epoch,'paths':getAfter(trackerState()).data.paths};
    allow update,delete: if false;
   }
   match /admins/{uid} { allow get: if signed()&&request.auth.uid==uid; allow list,write: if false; }
-  match /players/{id} { allow read: if true; allow write: if admin() && journaled("players/"+id); }
+  match /meta/manualSession {
+   allow get: if true;
+   allow list,create,delete: if false;
+   allow update: if admin() && currentWriter() && request.resource.data.keys().hasOnly(['sessionId']) && request.resource.data.keys().hasAll(['sessionId']) && getAfter(trackerState()).data.revision==get(trackerState()).data.revision+1
+    && (request.resource.data.sessionId==null || (request.resource.data.sessionId is string && existsAfter(/databases/$(database)/documents/sessions/$(request.resource.data.sessionId)) && manualActive(request.resource.data.sessionId,getAfter(/databases/$(database)/documents/sessions/$(request.resource.data.sessionId)).data) && ('sessions/'+request.resource.data.sessionId) in getAfter(trackerState()).data.paths))
+    && (resource.data.sessionId==null || resource.data.sessionId==request.resource.data.sessionId || !existsAfter(/databases/$(database)/documents/sessions/$(resource.data.sessionId)) || !manualActive(resource.data.sessionId,getAfter(/databases/$(database)/documents/sessions/$(resource.data.sessionId)).data));
+  }
+  match /players/{id} { allow read: if true; allow write: if admin() && currentWriter() && journaled("players/"+id); }
   match /rounds/{id} {
    allow read: if true;
-   allow create: if admin() && journaled("rounds/"+id) && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
-   allow update,delete: if admin() && journaled("rounds/"+id) && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow create: if admin() && currentWriter() && journaled("rounds/"+id) && roundPointer(request.resource.data) && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow update,delete: if admin() && currentWriter() && journaled("rounds/"+id) && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
   }
   match /sessions/{id} {
    allow read: if true;
-   allow create: if admin() && journaled("sessions/"+id) && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
-   allow update,delete: if admin() && journaled("sessions/"+id) && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'||!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow create: if admin() && currentWriter() && journaled("sessions/"+id) && sessionPointer(id,request.resource.data) && noSessionDeletion() && (!('source' in request.resource.data)||request.resource.data.source!='online');
+   allow update,delete: if admin() && currentWriter() && journaled("sessions/"+id) && noSessionDeletion() && (!('source' in resource.data)||resource.data.source!='online') && (request.method=='delete'?(!exists(manualGuard()) || getAfter(manualGuard()).data.sessionId!=id):((!('source' in request.resource.data)||request.resource.data.source!='online') && sessionPointer(id,request.resource.data)));
   }
   match /onlineRooms/{room} {
    allow get: if roomMember(room); allow list,write: if false;
