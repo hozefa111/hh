@@ -3,7 +3,8 @@ const A=require('node:assert/strict'),{chromium}=require('playwright');
 const {initializeApp}=require('firebase-admin/app'),{getAuth}=require('firebase-admin/auth');
 (async()=>{
  A.match(process.env.FIRESTORE_EMULATOR_HOST||'',/^(localhost|127\.0\.0\.1):8080$/);A.match(process.env.FIREBASE_AUTH_EMULATOR_HOST||'',/^(localhost|127\.0\.0\.1):9099$/);
- initializeApp({projectId:'demo-three-patti'});const auth=getAuth(),u=await auth.createUser({email:'manual-safety@example.test',password:'TestOnly-123456'});
+ A((await fetch('http://127.0.0.1:8080/emulator/v1/projects/demo-three-patti/databases/(default)/documents',{method:'DELETE'})).ok,'Reset isolated fixture only');
+ initializeApp({projectId:'demo-three-patti'});const auth=getAuth(),u=await auth.getUserByEmail('manual-safety@example.test').catch(()=>auth.createUser({email:'manual-safety@example.test',password:'TestOnly-123456'}));
  const {Firestore}=await import('../../backend/free/firestore.mjs'),db=new Firestore('demo-three-patti',async()=>'owner',undefined,{origin:'http://127.0.0.1:8080'});
  const round={source:'manual',type:'hukum',sessionId:'completed',timestamp:new Date(10),bid:180,playerIds:['a','b','c'],hukumId:'a',hukumName:'Alice',partnerIds:['b'],partnerNames:['Bob'],nonPartnerIds:['c'],nonPartnerNames:['Cara'],result:'win',scoreChanges:{a:360,b:180,c:0}};
  await db.request(':commit','POST',{writes:[db.set('admins/'+u.uid,{admin:true}),...['Alice','Bob','Cara'].map((name,i)=>db.set('players/'+['a','b','c'][i],{name,active:true})),db.set('rounds/old',round),db.set('sessions/completed',{sessionName:'Completed fixture',startTime:new Date(0),endTime:new Date(20),totalRounds:99,leaderboard:[],badges:{}}),db.set('meta/manualSession',{sessionId:null})]});
