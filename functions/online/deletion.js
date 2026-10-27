@@ -67,7 +67,11 @@ class SessionDeletion{
    else options={timestamp:true,where:{compositeFilter:{op:'AND',filters:[{fieldFilter:{field:{fieldPath:'timestamp'},op:'GREATER_THAN_OR_EQUAL',value:{timestampValue:new Date(validDate(session.startTime)).toISOString()}}},{fieldFilter:{field:{fieldPath:'timestamp'},op:'LESS_THAN_OR_EQUAL',value:{timestampValue:new Date(validDate(session.endTime)).toISOString()}}}]}}};
    const page=await db.scan('rounds',job.cursor,100,tx,options);
    for(const d of page)if(contains(d.data,session)&&(modern||!d.data.sessionId)){writes.push(db.set('sessionDeletionArchives/'+id+'_'+job.generation+'/rounds/'+d.id,d.data),db.delete('rounds/'+d.id));next.deletedRounds++;}
-   const last=page.at(-1);next.cursor=last?(modern?last.id:{id:last.id,time:+new Date(validDate(last.data.timestamp))}):job.cursor;if(page.length<100){next.cursor=null;if(modern&&job.snapshot.source!=='online'&&Number.isFinite(+new Date(validDate(session.startTime)))&&Number.isFinite(+new Date(validDate(session.endTime))))next.roundPhase='legacy';else next.phase='hands';}
+   const last=page.at(-1);next.cursor=last?(modern?last.id:{id:last.id,time:+new Date(validDate(last.data.timestamp))}):job.cursor;if(page.length<100){next.cursor=null;if(modern&&job.snapshot.source!=='online'&&Number.isFinite(+new Date(validDate(session.startTime)))&&Number.isFinite(+new Date(validDate(session.endTime))))next.roundPhase='legacy';else{
+    // Skip legacy-only cleanup phases only after proving both are empty in this transaction.
+    const [hands,room]=await Promise.all([db.scan('onlineRooms/'+id+'/hands',null,1,tx),db.get('onlineState/'+id,tx)]);
+    next.phase=hands.length||Object.keys(room?.members||{}).length?'hands':'finish';
+   }}
   }else if(job.phase==='hands'){
    const page=await db.scan('onlineRooms/'+id+'/hands',job.cursor,100,tx);
    for(const d of page)writes.push(db.set('sessionDeletionArchives/'+id+'_'+job.generation+'/hands/'+d.id,d.data),db.delete('onlineRooms/'+id+'/hands/'+d.id));
