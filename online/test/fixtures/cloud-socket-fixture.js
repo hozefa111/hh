@@ -1,7 +1,7 @@
 // Emulator/browser-only harness. Runs the bundled production connection code;
 // its API and sockets are isolated, with no production requests or private data.
 window.socketRecoveryFixture=async function(mode,scenario){
- const real={setTimeout,clearTimeout,setInterval,clearInterval,WebSocket,api,recoverPending},descriptor=Object.getOwnPropertyDescriptor(performance,'now');let now=0,serial=0;
+ const real={setTimeout,clearTimeout,setInterval,clearInterval,WebSocket,api,recoverPending},descriptor=Object.getOwnPropertyDescriptor(performance,'now'),savedRoom=localStorage.getItem('kaliRoom');let now=0,serial=0;
  const timers=new Map(),sockets=[],calls=[],schedule=(fn,ms,repeat)=>{const id=++serial;timers.set(id,{fn,at:now+ms,repeat,ms});return id;};
  async function drain(){for(let n=0;n<8;n++)await Promise.resolve();}
  async function advance(ms){const until=now+ms;for(;;){let hit;for(const [id,t]of timers)if(t.at<=until&&(!hit||t.at<hit[1].at))hit=[id,t];if(!hit)break;const [id,t]=hit;now=t.at;if(t.repeat)t.at+=t.ms;else timers.delete(id);t.fn();await drain();}now=until;await drain();}
@@ -24,5 +24,5 @@ window.socketRecoveryFixture=async function(mode,scenario){
   }
   const reconnecting=!connectionReady&&sockets.length>1,last=sockets[sockets.length-1];if(last===first)throw Error('No automatic socket recovery');last.open();last.message(state(12));renderNow();first.closed();first.message(state(99));
   return {reconnecting,connected:connectionReady,revision:room.revision,seat:room.members.human.seat,uid:uid(),sameCards:JSON.stringify(own.cards)===JSON.stringify(mine.cards),samePending:uncertainCommand===pending,ticketsOnly:calls.every(b=>b.operation==='socketTicket'),countMembers:Object.keys(room.members).length};
- }finally{unsubs.forEach(f=>f());unsubs=[];uncertainCommand=null;for(const key of ['setTimeout','clearTimeout','setInterval','clearInterval','WebSocket'])window[key]=real[key];api=real.api;recoverPending=real.recoverPending;if(descriptor)Object.defineProperty(performance,'now',descriptor);else delete performance.now;}
+ }finally{unsubs.forEach(f=>f());unsubs=[];uncertainCommand=null;if(savedRoom===null)localStorage.removeItem('kaliRoom');else localStorage.setItem('kaliRoom',savedRoom);for(const key of ['setTimeout','clearTimeout','setInterval','clearInterval','WebSocket'])window[key]=real[key];api=real.api;recoverPending=real.recoverPending;if(descriptor)Object.defineProperty(performance,'now',descriptor);else delete performance.now;}
 };
