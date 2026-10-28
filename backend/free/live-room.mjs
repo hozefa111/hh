@@ -5,7 +5,7 @@ import {Firestore} from './firestore.mjs';
 import {Identity} from './identity.mjs';
 import {exportResult} from './live-export.mjs';
 import {KeyedQueue} from './coordination.mjs';
-import {progress,diagnosticEnabled} from './progress.mjs';
+import {progress,diagnosticEnabled,probeAllowed} from './progress.mjs';
 import {failure} from './errors.mjs';
 import serviceModule from '../../functions/online/service.js';
 import R from '../../functions/online/shared/engine.js';
@@ -14,14 +14,22 @@ import deletion from '../../functions/online/deletion.js';
 const random=n=>{const a=new Uint32Array(1),limit=Math.floor(0x100000000/n)*n;do{crypto.getRandomValues(a);}while(a[0]>=limit);return a[0]%n;};
 export class KaliLiveRoom extends DurableObject {
  constructor(ctx,env){super(ctx,env);this.ctx=ctx;this.env=env;this.store=new LiveStore(ctx.storage);this.queue=new KeyedQueue();this.exports=new KeyedQueue();this.alarmMetrics={reads:0,writes:0,deleteSlices:0};this.identity=new Identity(env);this.db=new Firestore(env.FIREBASE_PROJECT_ID,()=>this.identity.token());this.service=new serviceModule.GameService(this.store,{clock:Date.now,id:()=>crypto.randomUUID().replaceAll('-',''),random});this.flushing=false;
-  ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping','pong'));
+  this.heartbeatGuard=null;this.syncHeartbeatMode(this.room());
  }
+ syncHeartbeatMode(r){const guard=!!(r&&R.active(r)&&!r.paused&&r.hand.deadline!==null);if(this.heartbeatGuard===guard)return;this.heartbeatGuard=guard;this.ctx.setWebSocketAutoResponse(guard?undefined:new WebSocketRequestResponsePair('ping','pong'));}
  room(){return this.store.read('room');}
  allowed(uid){const r=this.room(),p=r?.members[uid];if(this.store.read('deleted')?.complete)throw Error('Session was deleted');if(!p||p.reservation||p.status==='Removed')throw Error('Not a room participant');return r;}
  view(uid,scope){const room=this.allowed(uid);if(scope==='scores')return {scoreboard:scoreboard(room,this.store.pending()),serverNow:Date.now()};return {room:R.publicState(room),own:R.privateState(room,uid),pendingExports:this.store.pending(),serverNow:Date.now()};}
  async fetch(request){try{
   if(request.headers.get('Upgrade')?.toLowerCase()==='websocket')return await this.connect(request);
-  const {who,body,profile}=await request.json();if(!who?.uid)throw Error('Sign in required');
+  const {who,body,profile}=await request.json();
+  if(body?.operation==='operatorHealth'){
+   const r=this.room(),now=Date.now();if(!r||body.code!==r.code||!await probeAllowed(request,this.env.ROOM_HEALTH_PROBE,r.code,now))return new Response(null,{status:404});
+   // Deliberately bypass queues/arm/broadcast/flush: observation must not repair
+   // a missed deadline, write presence, or change the state being investigated.
+   return Response.json(progress(r,now,{alarmAt:await this.ctx.storage.getAlarm(),exporting:this.flushing,pending:this.store.nextExport()}),{headers:{'Cache-Control':'no-store'}});
+  }
+  if(!who?.uid)throw Error('Sign in required');
   return await this.queue.run('state',async()=>{
    this.store.storage.transactionSync(()=>{const key='rate:'+who.uid,old=this.store.read(key),now=Date.now(),same=old&&now-old.at<60000,count=same?old.count+1:1;if(count>90){const e=Error('Too many requests. Retry shortly.');e.status=429;e.retryAfter=Math.max(1,Math.ceil((old.at+60000-now)/1000));throw e;}this.store.write(key,{at:same?old.at:now,count});});
    if(profile&&profile.id===body.action?.playerId)this.store.write('profiles',{...this.store.read('profiles'),[profile.id]:profile.value});
@@ -60,11 +68,26 @@ export class KaliLiveRoom extends DurableObject {
   return new Response(null,{status:101,webSocket:client,headers:{'Sec-WebSocket-Protocol':'kali.v2'}});
  });}
  broadcast(){for(const ws of this.ctx.getWebSockets()){try{const attachment=ws.deserializeAttachment(),{uid,scope}=attachment;if(scope==='scores'){const key=(this.room().scoreboardRevision||0)+':'+this.store.pending();if(attachment.scoreKey===key)continue;attachment.scoreKey=key;ws.serializeAttachment(attachment);}ws.send(JSON.stringify({type:'state',...this.view(uid,scope)}));}catch{try{ws.close(this.store.read('deleted')?.complete?4004:4003,'Room access removed');}catch{}}}}
- async webSocketMessage(ws,message){if(message==='ping')return;try{ws.close(1008,'Use authenticated command endpoint');}catch{}}
+ async webSocketMessage(ws,message){
+  if(message==='ping'){
+   const a=ws.deserializeAttachment(),now=Date.now();if(!a||a.expires<=now){ws.close(4001,'Reconnect required');return;}
+   ws.send('pong');a.seen=now;ws.serializeAttachment(a);if(a.scope==='scores')return;
+   const r=this.room(),h=r?.hand;if(!r||!r.members[a.uid]||r.members[a.uid].status==='Removed'){ws.close(4003,'Room access removed');return;}
+   // Healthy timed games cost one room read per heartbeat. The normal alarm
+   // remains primary; only an already-overdue turn enters the validated path.
+   if(!R.active(r)||r.paused||h.deadline===null||h.deadline>now||this.store.read('deleted'))return;
+   await this.queue.run('state',async()=>{
+    const result=await this.service.due(r.id,h.id,h.turnGeneration);await this.arm();
+    if(!result.ignored){console.info('KALI_DEADLINE_RECOVERED',JSON.stringify({mode:r.mode,handNumber:h.number,turnKind:r.members[h.turn]?.kind,overdueMs:now-h.deadline}));this.broadcast();this.flushSoon();}
+   });return;
+  }
+  try{ws.close(1008,'Use authenticated command endpoint');}catch{}
+ }
  async webSocketClose(ws){const info=ws.deserializeAttachment();if(info?.scope==='scores'){try{ws.close(1000,'Closed');}catch{}return;}try{ws.close(1000,'Closed');}catch{}await this.queue.run('state',async()=>{if(info&&!this.ctx.getWebSockets(info.uid).some(s=>s!==ws&&s.readyState===1)&&this.room()&&!this.store.read('deleted'))await this.service.presence(this.room().id,info.uid,false);await this.arm();this.broadcast();});}
  async webSocketError(ws){await this.webSocketClose(ws);}
  async arm(){
   const r=this.room(),job=this.store.nextExport();let at=Infinity,now=Date.now();
+  this.syncHeartbeatMode(r);
   if(r&&!this.store.read('deleted')){if(R.active(r)&&!r.paused&&r.hand.deadline!==null)at=r.hand.deadline;const sockets=this.ctx.getWebSockets().filter(ws=>ws.readyState===1);if(sockets.length)at=Math.min(at,r.status==='stopped'||sockets.every(ws=>ws.deserializeAttachment().scope==='scores')?Math.min(...sockets.map(ws=>ws.deserializeAttachment().expires)):now+30000);}
   if(this.store.sql.exec("SELECT 1 FROM live_meta WHERE key >= 'ticket:' AND key < 'ticket;' LIMIT 1").length)at=Math.min(at,now+30000);
   // A durable safety wake survives a crash during background IO, without waking
@@ -80,8 +103,8 @@ export class KaliLiveRoom extends DurableObject {
  async alarm(){
   await this.queue.run('state',async()=>{
    const now=Date.now(),r=this.room();this.store.sql.exec("DELETE FROM live_meta WHERE key IN (SELECT key FROM live_meta WHERE key >= 'ticket:' AND key < 'ticket;' AND CAST(json_extract(value,'$.until') AS INTEGER) < ? LIMIT 25)",now);if(r&&!this.store.read('deleted')){
-    const expired=new Set();for(const ws of this.ctx.getWebSockets()){const a=ws.deserializeAttachment(),last=this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime()||a.seen;if(a.expires<=now||a.scope!=='scores'&&now-last>=30000){if(a.scope!=='scores')expired.add(a.uid);try{ws.close(4001,'Reconnect required');}catch{}}}
-    for(const uid of expired)if(!this.ctx.getWebSockets(uid).some(ws=>{const a=ws.deserializeAttachment();return a.expires>now&&now-(this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime()||a.seen)<30000;}))await this.service.presence(r.id,uid,false);
+    const expired=new Set();for(const ws of this.ctx.getWebSockets()){const a=ws.deserializeAttachment(),last=Math.max(this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime()||0,a.seen);if(a.expires<=now||a.scope!=='scores'&&now-last>=30000){if(a.scope!=='scores')expired.add(a.uid);try{ws.close(4001,'Reconnect required');}catch{}}}
+    for(const uid of expired)if(!this.ctx.getWebSockets(uid).some(ws=>{const a=ws.deserializeAttachment();return a.expires>now&&now-Math.max(this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime()||0,a.seen)<30000;}))await this.service.presence(r.id,uid,false);
     const current=this.room(),h=current.hand;if(R.active(current)&&!current.paused&&h.deadline!==null&&h.deadline<=now)await this.service.due(current.id,h.id,h.turnGeneration);
    }await this.arm();this.broadcast();
   });
