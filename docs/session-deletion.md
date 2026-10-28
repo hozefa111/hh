@@ -11,3 +11,10 @@ Deletion uses an administrator-authenticated preview hash, persisted job, privat
 Canonical stopped-room state remains as a server-only tombstone for audit/idempotency; public room/history, private hand documents and room-list memberships are removed. Recovery archives are not accessible to clients and do not participate in score calculations. Native additionally saves its existing local recovery backup before deletion.
 
 Destructive verification uses demo emulators only. Never run synthetic deletion tests against production user data.
+
+Accepted Cloudflare v2 deletion status is read from SQLite without waiting for the
+Firestore export/cleanup queue. Authorization checks still apply, and completion
+is reported only after the existing durable cleanup confirms it. Native requests
+use one command ID throughout a deletion, retry a lost transport response once
+with the identical body, and distinguish uncertain confirmation from a rejected
+delete. The HTTP read timeout matches the existing 25-second total call budget.

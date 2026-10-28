@@ -98,7 +98,12 @@ export class KaliLiveRoom extends DurableObject {
   try{const outcome=await exportResult(this.db,job.payload);this.store.ack(job.seq);if(outcome.deleted)this.store.write('deleted',{complete:false,at:Date.now()});this.broadcast();}
   catch(e){const delay=e.code==='RESOURCE_EXHAUSTED'?300000:Math.min(300000,1000*2**Math.min(job.attempts,8));this.store.defer(job,Date.now(),delay);}
  });}finally{this.flushing=false;await this.arm();}}
- async history(who,b){return this.exports.run('export',()=>this.historyLocked(who,b));}
+ async history(who,b){
+  // Once intent is durably accepted, polling only reads SQLite. Do not queue a
+  // confirmation behind Firestore cleanup; keep the same authorization checks.
+  if(b.action==='delete'&&this.store.read('deleted'))return this.historyLocked(who,b);
+  return this.exports.run('export',()=>this.historyLocked(who,b));
+ }
  async publishedPreview(r,b,d){return this.db.transaction(async tx=>{const saved=await this.db.get('sessions/'+r.id,tx);if(!saved)return {writes:[],result:{roundCount:0,impacts:[]}};const snapshot={...saved,endTime:saved.endTime||new Date(r.endedAt)};Object.defineProperty(snapshot,'_cascadeVersion',{value:saved._cascadeVersion});const {preview}=await d.describe(r.id,b.expectedName??null,tx,snapshot);return {writes:[],result:preview};});}
  async historyLocked(who,b){if(!/^[a-zA-Z0-9_-]{8,100}$/.test(b.commandId||''))throw Error('Command ID required');const r=this.room();if(who.uid!==r.admin&&!who.admin)throw Error('Admin access required');if(r.status!=='stopped')throw Error('Stop the online session before editing its history');if(b.expectedName!=null&&b.expectedName!==r.sessionName)throw Error('Session name changed. Refresh and retry.');
   if(b.action==='rename'){
