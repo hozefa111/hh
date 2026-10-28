@@ -7,3 +7,5 @@ const fixtureConfig=JSON.parse(fs.readFileSync(path.join(__dirname,'../firebase.
 fs.mkdirSync(fixture,{recursive:true});fs.writeFileSync(path.join(fixture,'firebase.json'),JSON.stringify(fixtureConfig,null,2)+'\n');
 const crypto=require('node:crypto'),files=['index.html','client.js','config.js','game.css','compat.js','shared/engine.js','shared/bot.js','runtime/engine.js','runtime/bot.js','runtime/client.js',...fs.readdirSync(path.join(source,'vendor')).map(f=>'vendor/'+f)];
 const digest=files.map(f=>crypto.createHash('sha256').update(fs.readFileSync(path.join(target,f))).digest('hex')+'  '+f).join('\n')+'\n';fs.writeFileSync(path.join(target,'shared-assets.sha256'),digest);
+// Test-only connection fixture is never bundled in the release application.
+const socketTest=path.resolve(process.env.KALI_ANDROID_ROOT||'../Apk/3PattiProNative','app/src/androidTest/assets/cloud-socket-fixture.js');fs.mkdirSync(path.dirname(socketTest),{recursive:true});fs.copyFileSync(path.join(source,'test/fixtures/cloud-socket-fixture.js'),socketTest);

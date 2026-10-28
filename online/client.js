@@ -362,26 +362,35 @@ function syncHistory(){
  },e=>{if(epoch===historyEpoch)notice('Hand history unavailable. '+e.message);});
 }
 async function attachCloudRoom(id){
- const owner=uid();let active=true,socket=null,opening=null,retry=null,heartbeat=null,renewal=null,pending=false,failures=0,renewNeeded=false;
+ const owner=uid();let active=true,socket=null,opening=null,openingTimer=null,retry=null,heartbeat=null,renewal=null,pending=false,failures=0,renewNeeded=false;
  const valid=()=>active&&subscribedRoomId===id&&uid()===owner;
  const cleanup=()=>{clearTimeout(retry);retry=null;clearInterval(heartbeat);heartbeat=null;clearTimeout(renewal);renewal=null;};
  const schedule=()=>{if(!valid()||retry)return;retry=setTimeout(()=>{retry=null;connect(renewNeeded);},Math.min(30000,1000*2**Math.min(failures++,5)));};
+ // Mobile networks can leave WebSocket.readyState OPEN/CONNECTING without ever
+ // delivering another callback. Detect that using the existing ping/pong traffic;
+ // no database polling, new move, replacement identity or cleared pending command.
+ const lost=ws=>{
+  if(!valid())return;
+  if(opening===ws){clearTimeout(openingTimer);openingTimer=null;opening=null;try{ws.close();}catch{}if(!socket||socket.readyState!==1){connectionReady=false;render();}schedule();return;}
+  if(socket!==ws)return;socket=null;connectionReady=false;cleanup();clearCollection();render();try{ws.close();}catch{}if(!opening)schedule();
+ };
  async function connect(force=false){
   if(!valid()||pending||opening?.readyState===0||!navigator.onLine||document.hidden)return;if(socket?.readyState===1&&!force){recoverPending();return;}
   clearTimeout(retry);retry=null;pending=true;renewNeeded=force;const old=socket;
   try{
-   const ticket=await api({operation:'socketTicket',roomId:id});if(!valid())return;
+   const ticket=await api({operation:'socketTicket',roomId:id});if(!valid()||document.hidden)return;
    const url=new URL('kaliSocket',host);url.protocol=url.protocol==='https:'?'wss:':'ws:';url.searchParams.set('roomId',id);
-   const resumeSnapshot=!old||old.readyState!==1;let firstState=true;const ws=new WebSocket(url,['kali.v2','ticket.'+ticket.ticket]);opening=ws;
-   ws.onopen=()=>{if(!valid()||opening!==ws){ws.close();return;}cleanup();socket=ws;opening=null;failures=0;renewNeeded=false;try{old?.close();}catch{}heartbeat=setInterval(()=>{if(valid()&&!document.hidden&&ws.readyState===1)ws.send('ping');},10000);renewal=setTimeout(()=>connect(true),240000);};
-   ws.onmessage=e=>{if(!valid()||socket!==ws||e.data==='pong')return;try{const v=JSON.parse(e.data);if(v.type!=='state'||v.room.id!==id||room&&v.room.revision<room.revision)return;if(firstState){firstState=false;if(resumeSnapshot){clearCollection();previous=null;}}const completed=room?.completed,oldPhase=room?.hand?.phase;cloudRooms=[...cloudRooms.filter(r=>r.roomId!==id),{roomId:id,code:v.room.code,sessionName:v.room.sessionName,status:v.room.status,transport:'cloudflare-v2',revision:v.room.revision}];if(v.room.status==='stopped'&&localStorage.getItem('kaliRoom')===id)localStorage.removeItem('kaliRoom');own=v.own;roomPendingExports=v.pendingExports||0;connectionReady=true;loadingRoom=false;clockAnchor={server:v.serverNow,mono:performance.now()};receiveRoomSnapshot(v.room);if(historyOpen&&(completed!==v.room.completed||oldPhase!==v.room.hand?.phase&&v.room.hand?.phase==='void')){stopHistory();render();}}catch{notice('Table update unavailable. Reconnecting…');ws.close();}};
-   ws.onclose=()=>{if(!valid())return;if(opening===ws){opening=null;schedule();return;}if(socket!==ws)return;socket=null;connectionReady=false;cleanup();clearCollection();render();schedule();};ws.onerror=()=>{try{ws.close();}catch{}};
+   const resumeSnapshot=!old||old.readyState!==1;let firstState=true,lastReply=performance.now();const ws=new WebSocket(url,['kali.v2','ticket.'+ticket.ticket]);opening=ws;
+   openingTimer=setTimeout(()=>lost(ws),15000);
+   ws.onopen=()=>{if(!valid()||opening!==ws){ws.close();return;}clearTimeout(openingTimer);openingTimer=null;cleanup();socket=ws;opening=null;lastReply=performance.now();failures=0;renewNeeded=false;try{old?.close();}catch{}heartbeat=setInterval(()=>{if(!valid()||document.hidden||socket!==ws)return;if(ws.readyState!==1||performance.now()-lastReply>=25000){lost(ws);return;}try{ws.send('ping');}catch{lost(ws);}},10000);renewal=setTimeout(()=>connect(true),240000);};
+   ws.onmessage=e=>{if(!valid()||socket!==ws)return;if(e.data==='pong'){lastReply=performance.now();return;}try{const v=JSON.parse(e.data);if(v.type!=='state'||v.room.id!==id||room&&v.room.revision<room.revision)return;lastReply=performance.now();if(firstState){firstState=false;if(resumeSnapshot){clearCollection();previous=null;}}const completed=room?.completed,oldPhase=room?.hand?.phase;cloudRooms=[...cloudRooms.filter(r=>r.roomId!==id),{roomId:id,code:v.room.code,sessionName:v.room.sessionName,status:v.room.status,transport:'cloudflare-v2',revision:v.room.revision}];if(v.room.status==='stopped'&&localStorage.getItem('kaliRoom')===id)localStorage.removeItem('kaliRoom');own=v.own;roomPendingExports=v.pendingExports||0;connectionReady=true;loadingRoom=false;clockAnchor={server:v.serverNow,mono:performance.now()};receiveRoomSnapshot(v.room);if(historyOpen&&(completed!==v.room.completed||oldPhase!==v.room.hand?.phase&&v.room.hand?.phase==='void')){stopHistory();render();}}catch{notice('Table update unavailable. Reconnecting…');lost(ws);}};
+   ws.onclose=()=>lost(ws);ws.onerror=()=>lost(ws);
   }catch(e){if(valid()){connectionReady=socket?.readyState===1;if(/Session was deleted|Not a room participant/.test(e.message)){active=false;cleanup();unavailableRoom(id);return;}error=e.message;render();schedule();}}
   finally{pending=false;}
  }
  const recover=force=>{if(force){failures=0;clearTimeout(retry);retry=null;}connect(!!force);};presenceRecovery=recover;
- const visibility=()=>{if(document.hidden){cleanup();const old=socket,pendingSocket=opening;socket=null;opening=null;connectionReady=false;try{old?.close();pendingSocket?.close();}catch{}}else recover(true);};document.addEventListener('visibilitychange',visibility);
- unsubs.push(()=>{active=false;cleanup();document.removeEventListener('visibilitychange',visibility);try{socket?.close();opening?.close();}catch{}if(presenceRecovery===recover)presenceRecovery=null;stopHistory();});
+ const visibility=()=>{if(document.hidden){cleanup();clearTimeout(openingTimer);openingTimer=null;const old=socket,pendingSocket=opening;socket=null;opening=null;connectionReady=false;try{old?.close();pendingSocket?.close();}catch{}}else recover(true);};document.addEventListener('visibilitychange',visibility);
+ unsubs.push(()=>{active=false;cleanup();clearTimeout(openingTimer);openingTimer=null;document.removeEventListener('visibilitychange',visibility);try{socket?.close();opening?.close();}catch{}if(presenceRecovery===recover)presenceRecovery=null;stopHistory();});
  await connect();localStorage.setItem('kaliRoom',id);
 }
 async function enter(id){clearCollection();connectionReady=false;loadingRoom=true;room=null;own={cards:[]};subscribedRoomId=id;render();unsubs.forEach(f=>f());unsubs=[];if(connection){const old=connection;connection=null;old.remove().catch(()=>{});}screen='room';records=[];historyMore=true;previous=null;selected=null;scoreOpen=false;roomPendingExports=0;uncertainCommand=restorePending(id);recoveryAttempts=0;

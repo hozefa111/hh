@@ -1153,7 +1153,7 @@ function syncHistory() {
 }
 async function attachCloudRoom(id) {
   const owner = uid();
-  let active = true, socket = null, opening = null, retry = null, heartbeat = null, renewal = null, pending = false, failures = 0, renewNeeded = false;
+  let active = true, socket = null, opening = null, openingTimer = null, retry = null, heartbeat = null, renewal = null, pending = false, failures = 0, renewNeeded = false;
   const valid = () => active && subscribedRoomId === id && uid() === owner;
   const cleanup = () => {
     clearTimeout(retry);
@@ -1170,6 +1170,35 @@ async function attachCloudRoom(id) {
       connect(renewNeeded);
     }, Math.min(3e4, 1e3 * 2 ** Math.min(failures++, 5)));
   };
+  const lost = (ws) => {
+    if (!valid()) return;
+    if (opening === ws) {
+      clearTimeout(openingTimer);
+      openingTimer = null;
+      opening = null;
+      try {
+        ws.close();
+      } catch {
+      }
+      if (!socket || socket.readyState !== 1) {
+        connectionReady = false;
+        render();
+      }
+      schedule();
+      return;
+    }
+    if (socket !== ws) return;
+    socket = null;
+    connectionReady = false;
+    cleanup();
+    clearCollection();
+    render();
+    try {
+      ws.close();
+    } catch {
+    }
+    if (!opening) schedule();
+  };
   async function connect(force = false) {
     if (!valid() || pending || (opening == null ? void 0 : opening.readyState) === 0 || !navigator.onLine || document.hidden) return;
     if ((socket == null ? void 0 : socket.readyState) === 1 && !force) {
@@ -1183,22 +1212,26 @@ async function attachCloudRoom(id) {
     const old = socket;
     try {
       const ticket = await api({ operation: "socketTicket", roomId: id });
-      if (!valid()) return;
+      if (!valid() || document.hidden) return;
       const url = new URL("kaliSocket", host);
       url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
       url.searchParams.set("roomId", id);
       const resumeSnapshot = !old || old.readyState !== 1;
-      let firstState = true;
+      let firstState = true, lastReply = performance.now();
       const ws = new WebSocket(url, ["kali.v2", "ticket." + ticket.ticket]);
       opening = ws;
+      openingTimer = setTimeout(() => lost(ws), 15e3);
       ws.onopen = () => {
         if (!valid() || opening !== ws) {
           ws.close();
           return;
         }
+        clearTimeout(openingTimer);
+        openingTimer = null;
         cleanup();
         socket = ws;
         opening = null;
+        lastReply = performance.now();
         failures = 0;
         renewNeeded = false;
         try {
@@ -1206,16 +1239,30 @@ async function attachCloudRoom(id) {
         } catch {
         }
         heartbeat = setInterval(() => {
-          if (valid() && !document.hidden && ws.readyState === 1) ws.send("ping");
+          if (!valid() || document.hidden || socket !== ws) return;
+          if (ws.readyState !== 1 || performance.now() - lastReply >= 25e3) {
+            lost(ws);
+            return;
+          }
+          try {
+            ws.send("ping");
+          } catch {
+            lost(ws);
+          }
         }, 1e4);
         renewal = setTimeout(() => connect(true), 24e4);
       };
       ws.onmessage = (e) => {
         var _a, _b, _c;
-        if (!valid() || socket !== ws || e.data === "pong") return;
+        if (!valid() || socket !== ws) return;
+        if (e.data === "pong") {
+          lastReply = performance.now();
+          return;
+        }
         try {
           const v = JSON.parse(e.data);
           if (v.type !== "state" || v.room.id !== id || room && v.room.revision < room.revision) return;
+          lastReply = performance.now();
           if (firstState) {
             firstState = false;
             if (resumeSnapshot) {
@@ -1238,30 +1285,11 @@ async function attachCloudRoom(id) {
           }
         } catch {
           notice("Table update unavailable. Reconnecting\u2026");
-          ws.close();
+          lost(ws);
         }
       };
-      ws.onclose = () => {
-        if (!valid()) return;
-        if (opening === ws) {
-          opening = null;
-          schedule();
-          return;
-        }
-        if (socket !== ws) return;
-        socket = null;
-        connectionReady = false;
-        cleanup();
-        clearCollection();
-        render();
-        schedule();
-      };
-      ws.onerror = () => {
-        try {
-          ws.close();
-        } catch {
-        }
-      };
+      ws.onclose = () => lost(ws);
+      ws.onerror = () => lost(ws);
     } catch (e) {
       if (valid()) {
         connectionReady = (socket == null ? void 0 : socket.readyState) === 1;
@@ -1291,6 +1319,8 @@ async function attachCloudRoom(id) {
   const visibility = () => {
     if (document.hidden) {
       cleanup();
+      clearTimeout(openingTimer);
+      openingTimer = null;
       const old = socket, pendingSocket = opening;
       socket = null;
       opening = null;
@@ -1306,6 +1336,8 @@ async function attachCloudRoom(id) {
   unsubs.push(() => {
     active = false;
     cleanup();
+    clearTimeout(openingTimer);
+    openingTimer = null;
     document.removeEventListener("visibilitychange", visibility);
     try {
       socket == null ? void 0 : socket.close();

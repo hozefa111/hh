@@ -1,0 +1,34 @@
+name: Live socket recovery verification
+on:
+  push:
+    branches: [fix/live-stall-recovery]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci --no-audit --no-fund && npm ci --prefix backend/free --no-audit --no-fund && npm install -g firebase-tools@15.34.0 --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - run: npm test && npm run check && npm run build --prefix backend/free
+      - name: Recover blocked sockets and finish mixed human/bot hands
+        run: |
+          mkdir -p test-results/live-socket
+          python3 -m http.server 8765 --bind 127.0.0.1 >test-results/live-socket/http.log 2>&1 &
+          trap 'kill $! 2>/dev/null || true' EXIT
+          firebase emulators:exec --project demo-three-patti --only auth,firestore 'node online/test/cloud-socket-recovery.browser.cjs && node online/test/pending-recovery.browser.cjs && node online/test/card-double-tap.browser.cjs && node online/test/card-playback.browser.cjs && cd backend/free && node --test test/live-client.test.mjs' >test-results/live-socket/verification.log 2>&1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: live-socket-verification
+          path: test-results/live-socket/
