@@ -5,6 +5,7 @@ import {Firestore} from './firestore.mjs';
 import {Identity} from './identity.mjs';
 import {exportResult} from './live-export.mjs';
 import {KeyedQueue} from './coordination.mjs';
+import {progress,diagnosticEnabled} from './progress.mjs';
 import {failure} from './errors.mjs';
 import serviceModule from '../../functions/online/service.js';
 import R from '../../functions/online/shared/engine.js';
@@ -66,10 +67,15 @@ export class KaliLiveRoom extends DurableObject {
   const r=this.room(),job=this.store.nextExport();let at=Infinity,now=Date.now();
   if(r&&!this.store.read('deleted')){if(R.active(r)&&!r.paused&&r.hand.deadline!==null)at=r.hand.deadline;const sockets=this.ctx.getWebSockets().filter(ws=>ws.readyState===1);if(sockets.length)at=Math.min(at,r.status==='stopped'||sockets.every(ws=>ws.deserializeAttachment().scope==='scores')?Math.min(...sockets.map(ws=>ws.deserializeAttachment().expires)):now+30000);}
   if(this.store.sql.exec("SELECT 1 FROM live_meta WHERE key >= 'ticket:' AND key < 'ticket;' LIMIT 1").length)at=Math.min(at,now+30000);
-  if(this.store.read('directoryDirty')!==null)at=Math.min(at,Math.max(now+1000,this.store.read('directoryRetry')||0));
-  if(job&&!this.store.read('deleted'))at=Math.min(at,Math.max(now+1000,job.due));
-  if(this.store.read('deleted')&&!this.store.read('deleted').complete)at=Math.min(at,Math.max(now+1000,this.store.read('deleteRetry')||0));
-  this.alarmMetrics.reads++;const old=await this.ctx.storage.getAlarm();if(Number.isFinite(at)){const target=Math.max(now+50,at);if(old===null||old>target){await this.ctx.storage.setAlarm(target);this.alarmMetrics.writes++;}}else if(old!==null){await this.ctx.storage.deleteAlarm();this.alarmMetrics.writes++;}
+  // A durable safety wake survives a crash during background IO, without waking
+  // once per second while that same export is still in flight. Live deadlines
+  // always take priority over this retry wake.
+  const backgroundWake=this.flushing?now+30000:now+1000;
+  if(this.store.read('directoryDirty')!==null)at=Math.min(at,Math.max(backgroundWake,this.store.read('directoryRetry')||0));
+  if(job&&!this.store.read('deleted'))at=Math.min(at,Math.max(backgroundWake,job.due));
+  if(this.store.read('deleted')&&!this.store.read('deleted').complete)at=Math.min(at,Math.max(backgroundWake,this.store.read('deleteRetry')||0));
+  this.alarmMetrics.reads++;const old=await this.ctx.storage.getAlarm();let scheduled=old;if(Number.isFinite(at)){const target=Math.max(now+50,at);if(old===null||old>target){await this.ctx.storage.setAlarm(target);this.alarmMetrics.writes++;scheduled=target;}}else if(old!==null){await this.ctx.storage.deleteAlarm();this.alarmMetrics.writes++;scheduled=null;}
+  if(diagnosticEnabled(this.env.ROOM_PROGRESS_DIAGNOSTIC,r,now))console.info('KALI_ROOM_PROGRESS',JSON.stringify(progress(r,now,{alarmAt:scheduled,exporting:this.flushing,pending:job})));
  }
  async alarm(){
   await this.queue.run('state',async()=>{
@@ -78,7 +84,11 @@ export class KaliLiveRoom extends DurableObject {
     for(const uid of expired)if(!this.ctx.getWebSockets(uid).some(ws=>{const a=ws.deserializeAttachment();return a.expires>now&&now-(this.ctx.getWebSocketAutoResponseTimestamp(ws)?.getTime()||a.seen)<30000;}))await this.service.presence(r.id,uid,false);
     const current=this.room(),h=current.hand;if(R.active(current)&&!current.paused&&h.deadline!==null&&h.deadline<=now)await this.service.due(current.id,h.id,h.turnGeneration);
    }await this.arm();this.broadcast();
-  });await this.flush();
+  });
+  // The next live deadline is already armed. A Firestore export can take several
+  // network round trips; do not keep this alarm handler open while it completes.
+  // The SQLite outbox remains durable and flush() still serializes/retries export.
+  this.flushSoon();
  }
  flushSoon(){if(!this.flushing)this.ctx.waitUntil(this.flush());}
  async flush(){if(this.flushing)return;this.flushing=true;try{await this.exports.run('export',async()=>{

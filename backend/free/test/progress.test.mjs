@@ -1,0 +1,6 @@
+import {test} from 'node:test';import A from 'node:assert/strict';import {progress,diagnosticEnabled} from '../progress.mjs';
+test('progress diagnostics never export identities, private cards or hidden teams',()=>{
+ const room={id:'private-room-id',code:'V2ABCDEF',revision:7,status:'playing',mode:6,paused:false,members:{'private-uid':{name:'PRIVATE-NAME',seat:2,kind:'bot'}},hand:{phase:'playing',turn:'private-uid',turnGeneration:9,deadline:950,tricks:[{}],trick:[{card:'PRIVATE-CARD'}],hands:{'private-uid':['PRIVATE-HAND']},secret:'PRIVATE-SECRET',partners:['PRIVATE-PARTNER']}};
+ const safe=progress(room,1000,{alarmAt:1100,exporting:true,pending:{payload:'PRIVATE-EXPORT'}});A.equal(safe.turnSeat,2);A.equal(safe.deadlineInMs,-50);A.equal(safe.exportInFlight,true);A.equal(safe.playedCount,1);A(!/private|PRIVATE|V2ABCDEF/.test(JSON.stringify(safe)));
+});
+test('targeted diagnostics require an explicit unexpired bounded operator flag',()=>{const r={code:'V2ABCDEF'},now=1000;A.equal(diagnosticEnabled('',r,now),false);A.equal(diagnosticEnabled('V2ABCDEF@999',r,now),false);A.equal(diagnosticEnabled('V2OTHERX@2000',r,now),false);A.equal(diagnosticEnabled('V2ABCDEF@999999999',r,now),false);A.equal(diagnosticEnabled('V2ABCDEF@2000',r,now),true);});
