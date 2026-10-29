@@ -8,13 +8,13 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 const baseline=process.env.DELETE_RECOVERY_BASELINE==='true';
 // Test-only inspection is not included in the deployed worker.
 const built=await build({stdin:{contents:`import {KaliLiveRoom as Base} from './live-room.mjs';export default {fetch(){return new Response('fixture')}};export class KaliLiveRoom extends Base {constructor(ctx,env){super(ctx,env);this.identity.token=async()=>'fixture';}async fetch(req){if(req.headers.get('X-Fixture-Inspect'))return Response.json({retry:this.store.read('deleteRetry'),attempts:this.store.read('deleteAttempts'),deleted:this.store.read('deleted')});return super.fetch(req);}}`,resolveDir:process.cwd(),sourcefile:'delete-recovery-fixture.mjs'},bundle:true,write:false,format:'esm',platform:'browser',external:['cloudflare:workers']});
-for(const code of ['UNAVAILABLE','RESOURCE_EXHAUSTED'])test('durable deletion retry after '+code,{timeout:20000},async()=>{
+for(const code of ['UNAVAILABLE','RESOURCE_EXHAUSTED','HISTORY_CHANGED'])test('durable deletion retry after '+code,{timeout:20000},async()=>{
  const memory=new RestMemory(),id='cf2_'+'3'.repeat(32);let fail=false,failures=0;
  const mf=new Miniflare(convertV4MiniflareOptions({name:'delete-recovery',modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-03-01',durableObjects:{KALI_LIVE_ROOMS:{className:'KaliLiveRoom',useSQLite:true}},bindings:{FIREBASE_PROJECT_ID:'demo-three-patti'},outboundService:async req=>{
   const u=new URL(req.url),body=req.method==='GET'?undefined:await req.text();
   if(u.hostname==='oauth2.googleapis.com')throw Error('Fixture must not need real credentials');
   if(u.hostname==='firestore.googleapis.com'){
-   if(fail&&u.pathname.endsWith(':beginTransaction')){fail=false;failures++;return Response.json({error:{status:code}},{status:code==='UNAVAILABLE'?503:429});}
+   if(fail&&u.pathname.endsWith(':beginTransaction')){fail=false;failures++;if(code==='HISTORY_CHANGED')memory.put('rounds/fixture',{...memory.get('rounds/fixture'),scoreChanges:{p:100}});else return Response.json({error:{status:code}},{status:code==='UNAVAILABLE'?503:429});}
    return memory.fetch(req.url,{method:req.method,body});
   }throw Error('Unexpected fixture transport');
  }}));
@@ -36,6 +36,7 @@ for(const code of ['UNAVAILABLE','RESOURCE_EXHAUSTED'])test('durable deletion re
   // Arm the fault at the tombstone commit boundary, after acceptance validation.
   const oldFetch=memory.fetch.bind(memory);memory.fetch=async(url,init)=>{const body=init.body?JSON.parse(init.body):{};const result=await oldFetch(url,init);if(body.writes?.some(w=>w.update?.name.endsWith('/onlineTombstones/'+id)))fail=true;return result;};
   A.equal((await call(request)).pending,true);
+  if(code==='HISTORY_CHANGED'){await wait(async()=> (await inspect()).deleted?.complete);A.equal(memory.get('sessionDeletions/'+id).preview.impacts[0].lifetimeChange,-100);A.equal(memory.get('rounds/fixture'),null);A.equal(memory.get('rounds/unrelated').scoreChanges.p,100);return;}
   const stalled=await wait(async()=>{const s=await inspect();return failures&&s.retry>Date.now()?s:null;});
   const delay=stalled.retry-Date.now();A.equal((await call(request)).pending,true);A(memory.get('rounds/fixture'),'Failure must not falsely remove points');
   console.log('DELETE_RETRY',JSON.stringify({baseline,code,delayMs:delay}));

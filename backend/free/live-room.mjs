@@ -158,7 +158,17 @@ export class KaliLiveRoom extends DurableObject {
    const deadline=Date.now()+500;
    // execute() still revalidates the confirmed token inside its transaction.
    // A session materialized here (pending export) needs a fresh server preview.
-   if(job)result=await d.step(r.id);else{const preview=prepared.previewToken?{previewToken:prepared.previewToken}:await d.preview(r.id,null);result=await d.execute(r.admin,{sessionId:r.id,previewToken:preview.previewToken,expectedName:null});}
+   if(job)result=await d.step(r.id);else{
+    let preview=prepared.previewToken?{previewToken:prepared.previewToken}:await d.preview(r.id,null);
+    try{result=await d.execute(r.admin,{sessionId:r.id,previewToken:preview.previewToken,expectedName:null});}
+    catch(e){
+     // Intent is already accepted. If history changed during setup, use the
+     // original server-preview path; execute still validates in a transaction.
+     if(!prepared.previewToken||e.message!=='Session rounds changed. Review the deletion again.')throw e;
+     this.store.write('deletePrepared',{previewToken:null});preview=await d.preview(r.id,null);
+     result=await d.execute(r.admin,{sessionId:r.id,previewToken:preview.previewToken,expectedName:null});
+    }
+   }
    // Each step remains an independent durable transaction. Drain a small slice,
    // rather than waiting for another alarm between empty cleanup phases.
    for(let steps=1;steps<4&&result.pending;steps++){
