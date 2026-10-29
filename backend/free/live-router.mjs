@@ -5,7 +5,7 @@ import {failure} from './errors.mjs';
 import R from '../../functions/online/shared/engine.js';
 export const liveId=id=>/^cf2_[a-f0-9]{32}$/.test(id||'');
 export class KaliLiveDirectory extends DurableObject {
- constructor(ctx,env){super(ctx,env);this.ctx=ctx;this.sql=ctx.storage.sql;this.sql.exec('CREATE TABLE IF NOT EXISTS live_rooms(id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, owner TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, revision INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL DEFAULT 0)');this.sql.exec('CREATE TABLE IF NOT EXISTS live_members(uid TEXT NOT NULL, room TEXT NOT NULL, PRIMARY KEY(uid,room))');}
+ constructor(ctx,env){super(ctx,env);this.ctx=ctx;this.sql=ctx.storage.sql;this.sql.exec('CREATE TABLE IF NOT EXISTS live_rooms(id TEXT PRIMARY KEY, code TEXT UNIQUE NOT NULL, owner TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, revision INTEGER NOT NULL DEFAULT 0, created INTEGER NOT NULL DEFAULT 0)');this.sql.exec('CREATE TABLE IF NOT EXISTS live_members(uid TEXT NOT NULL, room TEXT NOT NULL, PRIMARY KEY(uid,room))');this.sql.exec('CREATE INDEX IF NOT EXISTS live_rooms_score_order ON live_rooms(active DESC,created DESC,id DESC)');}
  async fetch(request){const b=await request.json();let result;this.ctx.storage.transactionSync(()=>{
   if(b.op==='existing')result=[...this.sql.exec('SELECT id,code,owner FROM live_rooms WHERE id=?',b.id)][0]||null;
   else if(b.op==='lookup')result=[...this.sql.exec('SELECT id FROM live_rooms WHERE code=?',b.code)][0]?.id||null;
@@ -16,6 +16,7 @@ export class KaliLiveDirectory extends DurableObject {
   }else if(b.op==='update'){this.sql.exec('UPDATE live_rooms SET active=?,revision=? WHERE id=? AND revision<=?',b.status==='stopped'?0:1,b.revision,b.id,b.revision);result={ok:true};
   }else if(b.op==='member'){this.sql.exec('INSERT OR IGNORE INTO live_members(uid,room) VALUES(?,?)',b.uid,b.room);result={ok:true};}
   else if(b.op==='scoreList'){const c=b.cursor,rows=[...this.sql.exec('SELECT m.room,r.active,r.created FROM live_members m JOIN live_rooms r ON r.id=m.room WHERE m.uid=?'+(c?' AND (r.active,r.created,r.id)<(?,?,?)':'')+' ORDER BY r.active DESC,r.created DESC,r.id DESC LIMIT 26',b.uid,...(c?[c.active,c.created,c.id]:[]))];const page=rows.slice(0,25),last=page.at(-1);result={rows:page,next:rows.length>25?{active:last.active,created:last.created,id:last.room}:null};}
+  else if(b.op==='publicScoreList'){const c=b.cursor,rows=[...this.sql.exec('SELECT id AS room,active,created FROM live_rooms'+(c?' WHERE (active,created,id)<(?,?,?)':'')+' ORDER BY active DESC,created DESC,id DESC LIMIT 26',...(c?[c.active,c.created,c.id]:[]))];const page=rows.slice(0,25),last=page.at(-1);result={rows:page,next:rows.length>25?{active:last.active,created:last.created,id:last.room}:null};}
   else if(b.op==='list')result=[...this.sql.exec('SELECT m.room FROM live_members m JOIN live_rooms r ON r.id=m.room WHERE m.uid=? AND r.active=1 ORDER BY r.created DESC LIMIT 100',b.uid)].map(r=>r.room);
   else throw Error('Unsupported directory operation');
  });return Response.json(result);}
@@ -30,10 +31,22 @@ export async function liveRoute(request,env){
  let roomId=socket?url.searchParams.get('roomId'):body.operation==='sessionHistory'?body.sessionId:body.roomId;
  if(oldJoin&&env.KALI_LIVE_DIRECTORY){const found=await directory({op:'lookup',code:String(body.code||'').trim().toUpperCase()});if(found)roomId=found;}
  const createRequest=body?.operation==='create'&&!!env.KALI_LIVE_DIRECTORY&&Number(body.clientProtocol)>=2,creation=body?.operation==='create'&&String(env.ENABLE_CLOUDFLARE_V2)==='true',rooms=['liveRooms','scoreboardRooms'].includes(body?.operation),transport=body?.operation==='transport';
- if(!socket&&!liveId(roomId)&&!creation&&!createRequest&&!rooms&&!transport)return null;
+ const publicScores=['publicScoreboardRooms','publicScoreboardTicket'].includes(body?.operation);
+ if(!socket&&!liveId(roomId)&&!creation&&!createRequest&&!rooms&&!transport&&!publicScores)return null;
  const target=id=>env.KALI_LIVE_ROOMS.getByName(id);
  if(socket){if(!liveId(roomId))return Response.json({error:'Invalid room'},{status:400});return target(roomId).fetch(request);}
  if(Number(body.clientProtocol)<2||!body.clientProtocol)return Response.json({error:'Update Required: install the latest 3 Patti PRO to use this room.',code:'UPDATE_REQUIRED'},{status:426});
+ if(publicScores){
+  if(!env.KALI_LIVE_DIRECTORY)throw Error('Score service unavailable');
+  // Intentionally public standings, like the existing tracker rankings. Never
+  // forward caller-supplied actions, identities or scope into the room actor.
+  const read=async(id,operation)=>target(id).fetch(new Request('https://room/',{method:'POST',body:JSON.stringify({who:{scope:'public-scores'},body:{operation}})}));
+  if(body.operation==='publicScoreboardTicket'){if(!liveId(roomId))throw Error('Invalid room');return read(roomId,'publicScoreboardTicket');}
+  const c=body.cursor;if(c&&(![0,1].includes(c.active)||!Number.isSafeInteger(c.created)||!liveId(c.id)))throw Error('Invalid session cursor');
+  const page=await directory({op:'publicScoreList',cursor:c}),rows=[],removed=[];
+  for(const {room:id}of page.rows){const res=await read(id,'publicScoreboard');if(res.ok)rows.push(await res.json());else if((await res.json()).error?.includes('Session was deleted'))removed.push(id);}
+  return Response.json({rooms:rows,removed,next:page.next,serverNow:Date.now()});
+ }
  const token=/^Bearer (.+)$/.exec(request.headers.get('Authorization')||'');if(!token)throw Error('Sign in required');
  const identity=sharedIdentity(env),who=await identity.verify(token[1]);
  const call=async(id,b,profile=null)=>target(id).fetch(new Request('https://room/',{method:'POST',body:JSON.stringify({who,body:b,profile})}));

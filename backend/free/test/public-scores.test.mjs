@@ -1,0 +1,40 @@
+import {test} from 'node:test';import A from 'node:assert/strict';import {build} from 'esbuild';import {Miniflare,convertV4MiniflareOptions} from 'miniflare';
+import R from '../../../functions/online/shared/engine.js';import NodeWebSocket from 'ws';
+const built=await build({stdin:{contents:`import worker,{KaliCoordinator,KaliLiveDirectory} from './worker.mjs';import {KaliLiveRoom as Base} from './live-room.mjs';export default {fetch(req,env){if(req.headers.get('X-Fixture-Deleted')||req.headers.get('X-Fixture-Score'))return env.KALI_LIVE_ROOMS.getByName(new URL(req.url).searchParams.get('roomId')).fetch(req);return worker.fetch(req,env);}};export {KaliCoordinator,KaliLiveDirectory};export class KaliLiveRoom extends Base {async fetch(req){if(req.headers.get('X-Fixture-Score')){const r=this.room();this.store.write('room',{...r,revision:r.revision+1,scoreboardRevision:(r.scoreboardRevision||0)+1,totals:{...r.totals,p:500}});this.broadcast();return Response.json({ok:true});}if(req.headers.get('X-Fixture-Deleted')){this.store.write('deleted',{complete:true});await this.arm();this.broadcast();return Response.json({ok:true});}return super.fetch(req);}}`,resolveDir:process.cwd(),sourcefile:'public-scores-fixture.mjs'},bundle:true,write:false,format:'esm',platform:'browser',external:['cloudflare:workers']});for(const mode of [4,6])test(mode+' seats: signed-out public scores never expose cards or permit gameplay',{timeout:15000},async()=>{
+ let outbound=0;const mf=new Miniflare(convertV4MiniflareOptions({name:'public-scores',modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-03-01',durableObjects:{KALI_COORDINATOR:{className:'KaliCoordinator',useSQLite:true},KALI_LIVE_ROOMS:{className:'KaliLiveRoom',useSQLite:true},KALI_LIVE_DIRECTORY:{className:'KaliLiveDirectory',useSQLite:true}},bindings:{FIREBASE_PROJECT_ID:'demo-three-patti',ENABLE_CLOUDFLARE_V2:'false'},outboundService:()=>{outbound++;throw Error('Public score access must not use Firebase/Auth');}}));let ws;
+ const directory=(await mf.getDurableObjectNamespace('KALI_LIVE_DIRECTORY')).getByName('directory-v2'),id='cf2_'+String(mode).repeat(32),actor=(await mf.getDurableObjectNamespace('KALI_LIVE_ROOMS')).getByName(id);
+ const dir=async body=>(await directory.fetch(new Request('https://dir/',{method:'POST',body:JSON.stringify(body)}))).json();
+ const internal=async body=>{const res=await actor.fetch(new Request('https://actor/',{method:'POST',body:JSON.stringify({who:{uid:'PRIVATE_OWNER_UID',admin:true},body})}));A.equal(res.status,200);return res.json();};
+ const api=async(body,status=200)=>{const res=await mf.dispatchFetch('https://app/kaliApi',{method:'POST',headers:{Origin:'https://appassets.androidplatform.net','Content-Type':'application/json'},body:JSON.stringify({clientProtocol:2,...body})});const data=await res.json();A.equal(res.status,status,JSON.stringify(data));return data;};
+ const wait=async fn=>{const until=Date.now()+2000;while(!fn()){A(Date.now()<until,'No score frame');await new Promise(r=>setTimeout(r,5));}};
+ try{
+  let room=R.create({id,code:'V2SECRET',uid:'PRIVATE_OWNER_UID',playerId:'p',name:'Player',mode,sessionName:'Public score fixture'},Date.now());let serial=0;
+  for(let seat=2;seat<=mode;seat++)room=R.command(room,'PRIVATE_OWNER_UID',{type:'bot',seat,botId:'bot_'+seat},Date.now());
+  room=R.command(room,'PRIVATE_OWNER_UID',{type:'ready'},Date.now(),max=>serial++%max);room.totals.p=310;room.stats={p:{roundsPlayed:1}};
+  await dir({op:'reserve',id,code:'V2SECRET',uid:'PRIVATE_OWNER_UID'});await internal({operation:'init',room,profiles:{},createFingerprint:'fixture'});
+  const before=await internal({operation:'snapshot'}),catalog=await api({operation:'publicScoreboardRooms'});A.equal(catalog.rooms.length,1);A.equal(catalog.rooms[0].scoreboard.leaderboard.find(p=>p.id==='p').score,310);
+  A(!/PRIVATE_OWNER_UID|V2SECRET|"own"|"cards"|"hands"|"secret"|"partners"/.test(JSON.stringify(catalog)));
+  const ticket=await api({operation:'publicScoreboardTicket',roomId:id,action:{type:'stop'},scope:'game',uid:'PRIVATE_OWNER_UID'});
+  const opened=await mf.dispatchFetch('https://app/kaliSocket?roomId='+id,{headers:{Upgrade:'websocket','Sec-WebSocket-Protocol':'kali.v2, ticket.'+ticket.ticket}});A.equal(opened.status,101);ws=opened.webSocket;ws.accept();let frame,closed=0;ws.addEventListener('message',e=>{frame=JSON.parse(e.data);});ws.addEventListener('close',e=>closed=e.code);await wait(()=>frame);
+  A(frame.scoreboard);for(const key of ['room','own','cards','hand','secret','partners'])A(!(key in frame));A(!JSON.stringify(frame).includes('PRIVATE_OWNER_UID'));
+  await actor.fetch(new Request('https://fixture/',{headers:{'X-Fixture-Score':'yes'}}));await wait(()=>frame.scoreboard.leaderboard.find(p=>p.id==='p').score===500);const scored=await internal({operation:'snapshot'});
+  const replay=await mf.dispatchFetch('https://app/kaliSocket?roomId='+id,{headers:{Upgrade:'websocket','Sec-WebSocket-Protocol':'kali.v2, ticket.'+ticket.ticket}});A.notEqual(replay.status,101);
+  for(const body of [{operation:'snapshot',roomId:id},{operation:'socketTicket',roomId:id},{operation:'liveHistory',roomId:id},{roomId:id,action:{type:'stop'}}])A.match((await api(body,400)).error,/Sign in/);
+  ws.send(JSON.stringify({action:{type:'play',card:before.own.cards[0]}}));await wait(()=>closed);A.equal(closed,1008);
+  const after=await internal({operation:'snapshot'});A.equal(after.room.revision,scored.room.revision);A.deepEqual(after.own.cards,before.own.cards);A.equal(after.room.members.PRIVATE_OWNER_UID.connected,before.room.members.PRIVATE_OWNER_UID.connected);
+  const watching=await api({operation:'publicScoreboardTicket',roomId:id});
+  // Verify terminal removal over a real TCP connection. The app clears its
+  // cache as soon as this frame arrives, before the close handshake completes.
+  ws=new NodeWebSocket(new URL('kaliSocket?roomId='+id,await mf.ready).href.replace(/^http/,'ws'),['kali.v2','ticket.'+watching.ticket]);closed=0;let watchingFrame,removedFrame;
+  ws.addEventListener('message',e=>{const message=JSON.parse(e.data);if(message.type==='removed'){removedFrame=message;ws.close(4004,'Session removed');}else watchingFrame=message;});ws.addEventListener('close',e=>closed=e.code);await wait(()=>watchingFrame);
+  for(let n=0;n<28;n++)await api({operation:'publicScoreboardTicket',roomId:id});await api({operation:'publicScoreboardTicket',roomId:id},429);A.equal((await internal({operation:'snapshot'})).room.revision,scored.room.revision);
+  await mf.dispatchFetch('https://fixture/?roomId='+id,{headers:{'X-Fixture-Deleted':'yes'}});await wait(()=>removedFrame);A.notEqual(ws.readyState,NodeWebSocket.OPEN);A.equal(removedFrame.sessionId,id);A.deepEqual(Object.keys(removedFrame).sort(),['sessionId','type']);A((await api({operation:'publicScoreboardRooms'})).removed.includes(id));A.match((await api({operation:'publicScoreboardTicket',roomId:id},400)).error,/deleted/);A.equal(outbound,0);
+ }finally{try{if(ws?.terminate)ws.terminate();else ws?.close();}catch{}await mf.dispose();}
+});
+test('public session catalog is bounded and cursor pages do not repeat',{timeout:15000},async()=>{
+ const mf=new Miniflare(convertV4MiniflareOptions({name:'score-pages',modules:true,script:built.outputFiles[0].text,compatibilityDate:'2026-03-01',durableObjects:{KALI_LIVE_DIRECTORY:{className:'KaliLiveDirectory',useSQLite:true}}}));
+ try{const actor=(await mf.getDurableObjectNamespace('KALI_LIVE_DIRECTORY')).getByName('directory-v2');const call=async body=>(await actor.fetch(new Request('https://dir/',{method:'POST',body:JSON.stringify(body)}))).json();
+  for(let n=0;n<31;n++)await call({op:'reserve',id:'cf2_'+n.toString(16).padStart(32,'0'),code:'ROOM'+n,uid:'PRIVATE'});
+  const first=await call({op:'publicScoreList'}),next=await call({op:'publicScoreList',cursor:first.next});A.equal(first.rows.length,25);A.equal(next.rows.length,6);A.equal(new Set([...first.rows,...next.rows].map(r=>r.room)).size,31);A.equal(next.next,null);
+ }finally{await mf.dispose();}
+});

@@ -19,7 +19,8 @@ export class KaliLiveRoom extends DurableObject {
  syncHeartbeatMode(r){const guard=!!(r&&R.active(r)&&!r.paused&&r.hand.deadline!==null);if(this.heartbeatGuard===guard)return;this.heartbeatGuard=guard;this.ctx.setWebSocketAutoResponse(guard?undefined:new WebSocketRequestResponsePair('ping','pong'));}
  room(){return this.store.read('room');}
  allowed(uid){const r=this.room(),p=r?.members[uid];if(this.store.read('deleted')?.complete)throw Error('Session was deleted');if(!p||p.reservation||p.status==='Removed')throw Error('Not a room participant');return r;}
- view(uid,scope){const room=this.allowed(uid);if(scope==='scores')return {scoreboard:scoreboard(room,this.store.pending()),serverNow:Date.now()};return {room:R.publicState(room),own:R.privateState(room,uid),pendingExports:this.store.pending(),serverNow:Date.now()};}
+ scoreRoom(){const r=this.room();if(!r)throw Error('Session not found');if(this.store.read('deleted'))throw Error('Session was deleted');return r;}
+ view(uid,scope){const room=scope==='scores'?this.scoreRoom():this.allowed(uid);if(scope==='scores')return {scoreboard:scoreboard(room,this.store.pending()),serverNow:Date.now()};return {room:R.publicState(room),own:R.privateState(room,uid),pendingExports:this.store.pending(),serverNow:Date.now()};}
  async fetch(request){try{
   if(request.headers.get('Upgrade')?.toLowerCase()==='websocket')return await this.connect(request);
   const {who,body,profile}=await request.json();
@@ -28,6 +29,17 @@ export class KaliLiveRoom extends DurableObject {
    // Deliberately bypass queues/arm/broadcast/flush: observation must not repair
    // a missed deadline, write presence, or change the state being investigated.
    return Response.json(progress(r,now,{alarmAt:await this.ctx.storage.getAlarm(),exporting:this.flushing,pending:this.store.nextExport()}),{headers:{'Cache-Control':'no-store'}});
+  }
+  if(['publicScoreboard','publicScoreboardTicket'].includes(body?.operation)){
+   if(who?.scope!=='public-scores')throw Error('Score access required');
+   const r=this.scoreRoom();
+   if(body.operation==='publicScoreboard')return Response.json({scoreboard:scoreboard(r,this.store.pending()),serverNow:Date.now()});
+   return await this.queue.run('state',async()=>{
+    this.scoreRoom();const now=Date.now(),old=this.store.read('publicScoreRate'),same=old&&now-old.at<60000,count=same?old.count+1:1;
+    if(count>30){const e=Error('Too many score connections. Retry shortly.');e.status=429;e.retryAfter=Math.max(1,Math.ceil((old.at+60000-now)/1000));throw e;}
+    this.store.write('publicScoreRate',{at:same?old.at:now,count});const ticket=crypto.randomUUID().replaceAll('-','');this.store.write('ticket:'+ticket,{uid:'viewer_'+ticket,until:Date.now()+30000,scope:'scores'});await this.arm();
+    return Response.json({ticket,roomId:r.id,serverNow:Date.now()});
+   });
   }
   if(!who?.uid)throw Error('Sign in required');
   return await this.queue.run('state',async()=>{
@@ -61,13 +73,14 @@ export class KaliLiveRoom extends DurableObject {
  async connect(request){return this.queue.run('state',async()=>{
   const protocol=request.headers.get('Sec-WebSocket-Protocol')||'',ticket=protocol.split(',').map(s=>s.trim()).find(s=>s.startsWith('ticket.'))?.slice(7);
   if(!/^[a-f0-9]{32}$/.test(ticket||''))throw Error('Invalid connection ticket');
-  const saved=this.store.read('ticket:'+ticket);if(!saved||saved.until<Date.now())throw Error('Connection ticket expired');this.allowed(saved.uid);
+  const saved=this.store.read('ticket:'+ticket);if(!saved||saved.until<Date.now())throw Error('Connection ticket expired');if(saved.scope==='scores')this.scoreRoom();else this.allowed(saved.uid);
   this.store.sql.exec('DELETE FROM live_meta WHERE key=?','ticket:'+ticket);
   const pair=new WebSocketPair(),[client,socket]=Object.values(pair);this.ctx.acceptWebSocket(socket,[saved.scope==='scores'?'scores:'+saved.uid:saved.uid]);socket.serializeAttachment({uid:saved.uid,scope:saved.scope||'game',seen:Date.now(),expires:Date.now()+300000});
-  if(saved.scope!=='scores')await this.service.presence(this.room().id,saved.uid,true);await this.arm();this.broadcast();
+  if(saved.scope!=='scores'){await this.service.presence(this.room().id,saved.uid,true);await this.arm();this.broadcast();}
+  else{await this.arm();socket.send(JSON.stringify({type:'state',...this.view(saved.uid,'scores')}));}
   return new Response(null,{status:101,webSocket:client,headers:{'Sec-WebSocket-Protocol':'kali.v2'}});
  });}
- broadcast(){for(const ws of this.ctx.getWebSockets()){try{const attachment=ws.deserializeAttachment(),{uid,scope}=attachment;if(scope==='scores'){const key=(this.room().scoreboardRevision||0)+':'+this.store.pending();if(attachment.scoreKey===key)continue;attachment.scoreKey=key;ws.serializeAttachment(attachment);}ws.send(JSON.stringify({type:'state',...this.view(uid,scope)}));}catch{try{ws.close(this.store.read('deleted')?.complete?4004:4003,'Room access removed');}catch{}}}}
+ broadcast(){for(const ws of this.ctx.getWebSockets()){try{const attachment=ws.deserializeAttachment(),{uid,scope}=attachment;if(scope==='scores'){const key=(this.scoreRoom().scoreboardRevision||0)+':'+this.store.pending();if(attachment.scoreKey===key)continue;attachment.scoreKey=key;ws.serializeAttachment(attachment);}ws.send(JSON.stringify({type:'state',...this.view(uid,scope)}));}catch{try{const deleted=this.store.read('deleted');if(deleted&&ws.deserializeAttachment()?.scope==='scores')ws.send(JSON.stringify({type:'removed',sessionId:this.room().id}));ws.close(deleted?4004:4003,'Room access removed');}catch{}}}}
  async webSocketMessage(ws,message){
   if(message==='ping'){
    const a=ws.deserializeAttachment(),now=Date.now();if(!a||a.expires<=now){ws.close(4001,'Reconnect required');return;}
