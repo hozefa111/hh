@@ -18,3 +18,17 @@ is reported only after the existing durable cleanup confirms it. Native requests
 use one command ID throughout a deletion, retry a lost transport response once
 with the identical body, and distinguish uncertain confirmation from a rejected
 delete. The HTTP read timeout matches the existing 25-second total call budget.
+
+V2 cleanup now durably remembers successful tombstone setup. It reuses the
+confirmed published preview only when setup leaves an existing stopped session
+unchanged; the deletion transaction still recalculates and validates its hash.
+Sessions materialized from pending exports retain the server-preview fallback.
+Retries/restarts resume the same durable job. Temporary upstream failures back
+off from 1 to 30 seconds; quota and non-transient failures retain the five-minute
+cooldown. No accepted deletion is reported complete before cascade confirmation.
+
+Local measurements (not phone/production latency): with 150 ms on each mocked
+Firestore request, an empty stopped-room cascade fell from 6,796 to 5,279 ms;
+point reads fell from 22 to 16 while writes stayed 14. Injected UNAVAILABLE
+previously scheduled a 300-second retry and now schedules one second. Real
+Firestore emulator verification also covers a four-round cascade and archives.

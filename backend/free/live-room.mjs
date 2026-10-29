@@ -146,10 +146,19 @@ export class KaliLiveRoom extends DurableObject {
  }
  async drainDelete(){const r=this.room(),state=this.store.read('deleted');if(!state||state.complete||(this.store.read('deleteRetry')||0)>Date.now())return;this.alarmMetrics.deleteSlices++;
   try{
-   await this.db.transaction(async tx=>{const [t,s,j]=await Promise.all([this.db.get('onlineTombstones/'+r.id,tx),this.db.get('sessions/'+r.id,tx),this.db.get('sessionDeletions/'+r.id,tx)]);const writes=[];if(!t)writes.push(this.db.set('onlineTombstones/'+r.id,{at:new Date(state.at),roomId:r.id},true));if(!s&&j?.status!=='complete')writes.push(this.db.set('sessions/'+r.id,metadata.sessionRecord(r)));else if(s&&!s.endTime&&j?.status!=='complete')writes.push(this.db.set('sessions/'+r.id,{...s,endTime:new Date(r.endedAt),status:'stopped'}));return {writes,result:null};});
-   const d=new deletion.SessionDeletion(this.db),job=await this.db.get('sessionDeletions/'+r.id);let result;
+   let prepared=this.store.read('deletePrepared'),job;
+   if(prepared)job=await this.db.get('sessionDeletions/'+r.id);
+   else{
+    const setup=await this.db.transaction(async tx=>{const [t,s,j]=await Promise.all([this.db.get('onlineTombstones/'+r.id,tx),this.db.get('sessions/'+r.id,tx),this.db.get('sessionDeletions/'+r.id,tx)]);const writes=[];if(!t)writes.push(this.db.set('onlineTombstones/'+r.id,{at:new Date(state.at),roomId:r.id},true));if(!s&&j?.status!=='complete')writes.push(this.db.set('sessions/'+r.id,metadata.sessionRecord(r)));else if(s&&!s.endTime&&j?.status!=='complete')writes.push(this.db.set('sessions/'+r.id,{...s,endTime:new Date(r.endedAt),status:'stopped'}));return {writes,result:{job:j,previewToken:s?.endTime?this.store.read('deletePreview')?.published?.previewToken:null}};});
+    // Persist only after the Firestore tombstone commit succeeds. Restart/retry
+    // can resume the durable job without repeating its setup transaction.
+    prepared={previewToken:setup.previewToken||null};this.store.write('deletePrepared',prepared);job=setup.job;
+   }
+   const d=new deletion.SessionDeletion(this.db);let result;
    const deadline=Date.now()+500;
-   if(job)result=await d.step(r.id);else{const preview=await d.preview(r.id,null);result=await d.execute(r.admin,{sessionId:r.id,previewToken:preview.previewToken,expectedName:null});}
+   // execute() still revalidates the confirmed token inside its transaction.
+   // A session materialized here (pending export) needs a fresh server preview.
+   if(job)result=await d.step(r.id);else{const preview=prepared.previewToken?{previewToken:prepared.previewToken}:await d.preview(r.id,null);result=await d.execute(r.admin,{sessionId:r.id,previewToken:preview.previewToken,expectedName:null});}
    // Each step remains an independent durable transaction. Drain a small slice,
    // rather than waiting for another alarm between empty cleanup phases.
    for(let steps=1;steps<4&&result.pending;steps++){
@@ -157,7 +166,13 @@ export class KaliLiveRoom extends DurableObject {
     await new Promise(resolve=>setTimeout(resolve,0));if(Date.now()>=deadline)break;
     result=await d.step(r.id);
    }
+   this.store.sql.exec("DELETE FROM live_meta WHERE key IN ('deleteRetry','deleteAttempts')");
    if(!result.pending)this.store.storage.transactionSync(()=>{this.store.write('deleted',{...state,complete:true});this.store.sql.exec('DELETE FROM live_outbox');this.store.sql.exec('DELETE FROM live_hands');});if(!result.pending)this.broadcast();
-  }catch{this.store.write('deleteRetry',Date.now()+300000);}
+  }catch(e){
+   const attempts=(this.store.read('deleteAttempts')||0)+1;
+   const transient=['UNAVAILABLE','DEADLINE_EXCEEDED','ABORTED','INTERNAL'].includes(e.code)||[500,502,503,504].includes(e.status)||['TimeoutError','AbortError','TypeError'].includes(e.name);
+   const delay=e.code==='RESOURCE_EXHAUSTED'||!transient?300000:Math.min(30000,1000*2**Math.min(attempts-1,5));
+   this.store.storage.transactionSync(()=>{this.store.write('deleteAttempts',attempts);this.store.write('deleteRetry',Date.now()+delay);});
+  }
  }
 }
